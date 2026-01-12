@@ -1,6 +1,6 @@
 task: detect
 mode: train
-model: yolov8s.pt
+model: runs/fabric\yolov8_major_project\weights\last.pt
 data: data.yaml
 epochs: 160
 time: null
