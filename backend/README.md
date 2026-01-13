@@ -5,13 +5,15 @@ Flask-based REST API for fabric defect detection using YOLO.
 ## Setup
 
 1. Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
 2. Run the server:
+
 ```bash
-python app.py
+python run.py
 ```
 
 The API will start on `http://localhost:5000`
@@ -19,14 +21,17 @@ The API will start on `http://localhost:5000`
 ## API Endpoints
 
 ### POST /api/detect
+
 Upload an image and get fabric defect detections.
 
 **Request:**
+
 - Method: POST
 - Content-Type: multipart/form-data
 - Body: image file with key 'image'
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -44,14 +49,17 @@ Upload an image and get fabric defect detections.
 ```
 
 ### GET /api/health
+
 Health check endpoint.
 
 ### GET /api/model-info
+
 Get information about the loaded YOLO model.
 
 ## Model
 
 The API uses the trained model from:
+
 - Primary: `../runs/fabric/yolov8_major_project/weights/best.pt`
 - Fallback: `../yolov8s.pt`
 

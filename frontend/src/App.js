@@ -1,12 +1,31 @@
-import React from 'react';
-import './App.css';
-import MainScreen from './components/MainScreen';
+import React, { useState, useEffect } from "react";
+import "./App.css";
+import MainScreen from "./components/MainScreen";
 
 function App() {
+  const [theme, setTheme] = useState(() => {
+    // Check localStorage or system preference
+    const savedTheme = localStorage.getItem("theme");
+    if (savedTheme) return savedTheme;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  });
+
+  useEffect(() => {
+    // Apply theme to document root
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  };
+
   return (
-    <div className="App">
-      <MainScreen />
-    </div>
+    <>
+      <MainScreen theme={theme} onThemeToggle={toggleTheme} />
+    </>
   );
 }
 

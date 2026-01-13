@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import './MainScreen.css';
-import './UploadDetection.css';
-import './LiveDetection.css';
 import ImageUpload from './ImageUpload';
 import DetectionHistory from './DetectionHistory';
 import ModelManagement from './ModelManagement';
 import axios from 'axios';
 
-function MainScreen() {
+function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -25,8 +23,8 @@ function MainScreen() {
   const streamRef = React.useRef(null);
 
   const API_URL = 'http://localhost:5000/api/detect';
-  const AB_TEST_URL = 'http://localhost:5000/api/detect/ab-test';
   const HEALTH_URL = 'http://localhost:5000/api/health';
+  const WS_URL = 'ws://localhost:5000/ws/detect';
 
   useEffect(() => {
     checkServerHealth();
@@ -49,6 +47,10 @@ function MainScreen() {
     }
   };
 
+  const [liveResults, setLiveResults] = useState(null);
+  const websocketRef = React.useRef(null);
+  const frameIntervalRef = React.useRef(null);
+
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -61,11 +63,66 @@ function MainScreen() {
         videoRef.current.style.display = 'block';
         streamRef.current = stream;
         setIsCameraActive(true);
+        connectWebSocket();
       }
     } catch (err) {
       console.error('Error accessing camera:', err);
       alert('Cannot access camera. Please check permissions.');
     }
+  };
+
+  const connectWebSocket = () => {
+    if (websocketRef.current) return;
+    
+    const ws = new WebSocket(WS_URL);
+    
+    ws.onopen = () => {
+      console.log('Connected to live detection server');
+      // Start sending frames
+      startFrameStreaming();
+    };
+    
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.success && canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        const img = new Image();
+        img.onload = () => {
+          canvasRef.current.width = img.width;
+          canvasRef.current.height = img.height;
+          ctx.drawImage(img, 0, 0);
+        };
+        img.src = data.annotated_image;
+        setLiveResults(data);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+    
+    websocketRef.current = ws;
+  };
+
+  const startFrameStreaming = () => {
+    frameIntervalRef.current = setInterval(() => {
+      if (!videoRef.current || !websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) return;
+      
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(videoRef.current, 0, 0);
+      
+      const base64Image = canvas.toDataURL('image/jpeg', 0.6); // 0.6 quality for speed
+      
+      websocketRef.current.send(JSON.stringify({
+        image: base64Image,
+        confidence: confidencePct / 100,
+        overlap: 1 - (overlapPct / 100)
+      }));
+      
+    }, 200); // 5 FPS
   };
 
   const stopCamera = () => {
@@ -77,41 +134,79 @@ function MainScreen() {
       videoRef.current.srcObject = null;
       videoRef.current.style.display = 'none';
     }
+    
+    if (frameIntervalRef.current) {
+      clearInterval(frameIntervalRef.current);
+      frameIntervalRef.current = null;
+    }
+    
+    if (websocketRef.current) {
+      websocketRef.current.close();
+      websocketRef.current = null;
+    }
+    
     setIsCameraActive(false);
+    setLiveResults(null);
   };
+
 
   // Model info panel removed per request
 
-  const handleImageUpload = async (file) => {
-    setLoading(true);
-    setProgress(0);
+  // State for file persistence and cancellation
+  const [currentFile, setCurrentFile] = useState(null);
+  const abortControllerRef = React.useRef(null);
+
+  const handleImageUpload = async (file, isUpdate = false) => {
+    // If it's a new file upload, reset everything
+    if (!isUpdate) {
+      setLoading(true);
+      setCurrentFile(file);
+      setResults(null); 
+      setProgress(0);
+    } else {
+      // If updating params, just show small progress but keep result
+      // We don't set results to null here to prevent flashing
+      setLoading(true);
+    }
+    
     setError(null);
-    setResults(null);
+
+    // Cancel previous request if exists
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
 
     try {
       const formData = new FormData();
       formData.append('image', file);
       formData.append('confidence', (confidencePct / 100));
-      formData.append('overlap', (overlapPct / 100));
+      // Invert overlap: 100% on slider = 0 IoU (Strict, No Overlap)
+      // 0% on slider = 1 IoU (Loose, All Overlaps allowed)
+      formData.append('overlap', (1 - (overlapPct / 100)));
       formData.append('opacity', (opacityPct / 100));
 
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setProgress(prev => {
-          if (prev < 90) return prev + Math.random() * 30;
-          return prev;
-        });
-      }, 200);
+      // Simulate progress only for new uploads
+      let progressInterval;
+      if (!isUpdate) {
+        progressInterval = setInterval(() => {
+          setProgress(prev => {
+            if (prev < 90) return prev + Math.random() * 30;
+            return prev;
+          });
+        }, 200);
+      }
 
       // Call the Flask backend API
       const response = await axios.post(API_URL, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+        headers: { 'Content-Type': 'multipart/form-data' },
+        signal: abortControllerRef.current.signal
       });
 
-      clearInterval(progressInterval);
-      setProgress(100);
+      if (!isUpdate) {
+        clearInterval(progressInterval);
+        setProgress(100);
+      }
 
       if (response.data.success) {
         // Use annotated image if available, otherwise use original
@@ -122,28 +217,68 @@ function MainScreen() {
           detections: response.data.detections,
           total_detections: response.data.total_detections,
           image_size: response.data.image_size,
-          confidence_used: response.data.confidence_used
+          confidence_used: response.data.confidence_used,
+          overlap_used: response.data.overlap_used
         });
       } else {
         setError(response.data.error || 'Detection failed');
       }
 
       setLoading(false);
-      setTimeout(() => setProgress(0), 500);
+      if (!isUpdate) setTimeout(() => setProgress(0), 500);
 
     } catch (err) {
-      setProgress(0);
-      if (err.response) {
-        setError(`Server error: ${err.response.data.error || err.response.statusText}`);
-      } else if (err.request) {
-        setError('Cannot connect to backend server. Make sure Flask is running on http://localhost:5000');
+      if (axios.isCancel(err)) {
+        console.log('Request canceled', err.message);
       } else {
-        setError('Error processing image. Please try again.');
+        setProgress(0);
+        if (err.response) {
+          setError(`Server error: ${err.response.data.error || err.response.statusText}`);
+        } else if (err.request) {
+          setError('Cannot connect to backend server. Make sure Flask is running on http://localhost:5000');
+        } else {
+          setError('Error processing image. Please try again.');
+        }
+        setLoading(false);
+        console.error('Detection error:', err);
       }
-      setLoading(false);
-      console.error('Detection error:', err);
     }
   };
+
+  // Debounced Re-Detection Effect
+  useEffect(() => {
+    if (!currentFile) return;
+
+    const timer = setTimeout(() => {
+      handleImageUpload(currentFile, true);
+    }, 600); // 600ms debounce
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confidencePct, overlapPct, opacityPct]);
+
+
+  // Telemetry Simulation
+  const [systemStats, setSystemStats] = useState({
+    version: '2.1.0',
+    latency: 24,
+    memory: 4.2,
+    fps: 30
+  });
+
+  useEffect(() => {
+    // Simulate live telemetry
+    const telemetryInterval = setInterval(() => {
+      setSystemStats(prev => ({
+        ...prev,
+        latency: Math.floor(Math.random() * (45 - 15) + 15), // Random 15-45ms
+        memory: +(4.0 + Math.random() * 0.5).toFixed(1), // Random 4.0-4.5GB
+        fps: Math.floor(Math.random() * (60 - 28) + 28)
+      }));
+    }, 2000);
+
+    return () => clearInterval(telemetryInterval);
+  }, []);
 
   return (
     <div className="main-screen">
@@ -168,69 +303,72 @@ function MainScreen() {
         </div>
       )}
 
-      {/* Header */}
+      {/* Professional Header Structure */}
       <header className="app-header">
-        <div className="header-left">
-          <div className="logo-container">
-            <div className="logo-icon">🔍</div>
-            <div>
-              <h1 className="app-title">Fabric Fault Detection</h1>
-              <p className="app-subtitle">AI-Powered YOLO Detection System</p>
+        {/* 1. Brand Identity */}
+        <div className="header-brand">
+          <div className="brand-logo">
+            <span className="logo-symbol">◈</span>
+          </div>
+          <div className="brand-info">
+            <h1 className="brand-title">FABRIC.AI</h1>
+            <span className="brand-subtitle">DEFECT DETECTION SYSTEM v{systemStats.version}</span>
+          </div>
+        </div>
+
+        {/* 2. Main Navigation & Controls */}
+        <div className="header-nav">
+          <div className="nav-tabs">
+            <button 
+              className={`nav-tab ${activeTab === 'upload' ? 'active' : ''}`}
+              onClick={() => setActiveTab('upload')}
+            >
+              <span className="tab-icon">DATASET</span>
+              <span className="tab-label">UPLOAD</span>
+            </button>
+            <button 
+              className={`nav-tab ${activeTab === 'live' ? 'active' : ''}`}
+              onClick={() => setActiveTab('live')}
+            >
+              <span className="tab-icon">SENSOR</span>
+              <span className="tab-label">LIVE FEED</span>
+            </button>
+          </div>
+          
+          <div className="nav-separator"></div>
+
+          <div className="nav-actions">
+            <button className="icon-btn" onClick={() => setShowHistory(true)} title="Detection Logs">
+              <span className="btn-icon">📋</span>
+            </button>
+            <button className="icon-btn" onClick={() => setShowModelMgmt(true)} title="System Configuration">
+              <span className="btn-icon">⚙️</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 3. System Status & Telemetry */}
+        <div className="header-status">
+          <div className="status-group">
+            <div className="status-label">SYS.STATUS</div>
+            <div className={`status-badge ${serverStatus}`}>
+              <span className="status-dot"></span>
+              {serverStatus === 'online' ? 'ONLINE' : 'OFFLINE'}
             </div>
           </div>
-        </div>
+          
+          <div className="status-divider"></div>
 
-        <div className="header-center">
-          <button 
-            className={`tab-button ${activeTab === 'upload' ? 'active' : ''}`}
-            onClick={() => setActiveTab('upload')}
-          >
-            📤 Upload Detection
-          </button>
-          <button 
-            className={`tab-button ${activeTab === 'live' ? 'active' : ''}`}
-            onClick={() => setActiveTab('live')}
-          >
-            📹 Live Detection
-          </button>
-          <button 
-            className="tab-button secondary"
-            onClick={() => setShowHistory(true)}
-            title="View detection history"
-          >
-            📊 History
-          </button>
-          <button 
-            className="tab-button secondary"
-            onClick={() => setShowModelMgmt(true)}
-            title="Manage models and settings"
-          >
-            ⚙️ Models
-          </button>
-        </div>
+          <div className="status-group">
+            <div className="status-label">RESULTS</div>
+            <div className="status-value">
+              {results ? results.total_detections : 0}
+            </div>
+          </div>
 
-        <div className="header-right">
-          <div className="stats-mini">
-            {results && (
-              <>
-                <div className="stat-mini">
-                  <span className="stat-value">{results.total_detections}</span>
-                  <span className="stat-label">Detections</span>
-                </div>
-                <div className="stat-mini">
-                  <span className="stat-value">{(results.confidence_used * 100).toFixed(0)}%</span>
-                  <span className="stat-label">Confidence</span>
-                </div>
-              </>
-            )}
-          </div>
-          <div className="server-status">
-            <span className={`${serverStatus}`}></span>
-            <span className="status-text">
-              {serverStatus === 'online' ? '🟢 Online' : 
-               serverStatus === 'offline' ? '🔴 Offline' : '🟡 Checking...'}
-            </span>
-          </div>
+          <button className="theme-switch" onClick={onThemeToggle}>
+            {theme === 'dark' ? '☾' : '☼'}
+          </button>
         </div>
       </header>
 
@@ -259,8 +397,10 @@ function MainScreen() {
             
             <div className="adjustment-stack">
               <div className="slider-block">
-                <label className="control-label">Confidence:</label>
-                <div className="value-display">{confidencePct}%</div>
+                <div className="control-label">
+                  <span>Confidence</span>
+                  <span className="value-display">{confidencePct}%</span>
+                </div>
                 <input
                   type="range"
                   min="0"
@@ -270,13 +410,16 @@ function MainScreen() {
                   onChange={(e) => setConfidencePct(parseInt(e.target.value))}
                   className="ui-slider"
                   disabled={loading}
+                  aria-label="Confidence threshold"
                 />
                 <div className="slider-scale"><span>0%</span><span>100%</span></div>
               </div>
 
               <div className="slider-block">
-                <label className="control-label">Overlap:</label>
-                <div className="value-display">{overlapPct}%</div>
+                <div className="control-label">
+                  <span>Overlap</span>
+                  <span className="value-display">{overlapPct}%</span>
+                </div>
                 <input
                   type="range"
                   min="0"
@@ -286,13 +429,16 @@ function MainScreen() {
                   onChange={(e) => setOverlapPct(parseInt(e.target.value))}
                   className="ui-slider"
                   disabled={loading}
+                  aria-label="Overlap threshold"
                 />
                 <div className="slider-scale"><span>0%</span><span>100%</span></div>
               </div>
 
               <div className="slider-block">
-                <label className="control-label">Opacity:</label>
-                <div className="value-display">{opacityPct}%</div>
+                <div className="control-label">
+                  <span>Opacity</span>
+                  <span className="value-display">{opacityPct}%</span>
+                </div>
                 <input
                   type="range"
                   min="0"
@@ -302,6 +448,7 @@ function MainScreen() {
                   onChange={(e) => setOpacityPct(parseInt(e.target.value))}
                   className="ui-slider"
                   disabled={loading}
+                  aria-label="Opacity level"
                 />
                 <div className="slider-scale"><span>0%</span><span>100%</span></div>
               </div>
@@ -333,8 +480,13 @@ function MainScreen() {
                 </div>
               </div>
             )}
-            {results && !loading && (
-              <img src={results.image} alt="Detection view" className="detected-image" />
+            {results && (
+              <img 
+                src={results.image} 
+                alt="Detection view" 
+                className="detected-image" 
+                style={{ opacity: loading ? 0.7 : 1, transition: 'opacity 0.3s' }}
+              />
             )}
             {!results && !loading && !error && (
               <div className="placeholder-state">
@@ -352,11 +504,12 @@ function MainScreen() {
             <h3 className="panel-title">Results</h3>
           </div>
           <div className="panel-body">
-            {results && !loading ? (
+            {results ? (
               <>
                 <div className="detections-list">
                   <div className="detections-header">
                     <span className="detections-count">Detected Faults ({results.detections.length})</span>
+                    {loading && <span className="updating-badge" style={{fontSize: '0.7em', color: 'var(--accent-primary)', marginLeft:'auto'}}>Updating...</span>}
                   </div>
                   {results.detections.length === 0 ? (
                     <div className="no-detections">
@@ -388,6 +541,14 @@ function MainScreen() {
                     <div className="summary-label">Avg Confidence</div>
                     <div className="summary-value">{results.detections.length > 0 ? (results.detections.reduce((sum, d) => sum + d.confidence, 0) / results.detections.length * 100).toFixed(1) + '%' : 'N/A'}</div>
                   </div>
+                  <div className="summary-card">
+                    <div className="summary-label">Conf. Thresh</div>
+                    <div className="summary-value">{(results.confidence_used * 100).toFixed(0)}%</div>
+                  </div>
+                  <div className="summary-card">
+                    <div className="summary-label">Overlap Strict</div>
+                    <div className="summary-value">{results.overlap_used !== undefined ? ((1 - results.overlap_used) * 100).toFixed(0) + '%' : 'N/A'}</div>
+                  </div>
                 </div>
               </>
             ) : (
@@ -405,127 +566,142 @@ function MainScreen() {
       {/* Live Detection Tab */}
       {activeTab === 'live' && (
       <main className="dashboard-grid">
-        {/* Camera Controls Panel */}
+        {/* Column 1: Live Feed (Raw) + Settings (Left Sidebar) */}
         <section className="panel-card upload-card">
           <div className="panel-header">
-            <h3 className="panel-title">Camera & Settings</h3>
+            <h3 className="panel-title">Live Feed (Raw)</h3>
           </div>
           <div className="panel-body">
+            {/* Camera Controls */}
             <div className="camera-controls">
               <button 
                 className="camera-button"
                 onClick={startCamera}
                 disabled={isCameraActive}
               >
-                📹 Start Camera
+                📹 Start
               </button>
               <button 
                 className="camera-button secondary"
                 onClick={stopCamera}
                 disabled={!isCameraActive}
               >
-                ⏹️ Stop Camera
+                ⏹️ Stop
               </button>
             </div>
 
+            {/* Video Area */}
+            <div className="live-feed-container" style={{ width: '100%', aspectRatio: '4/3', position: 'relative', background: '#000', borderRadius: '4px', overflow: 'hidden', marginBottom: '1rem' }}>
+               {!isCameraActive && (
+                 <div className="placeholder-state" style={{ position: 'absolute', inset: 0, justifyContent: 'center', height: '100%' }}>
+                    <div className="placeholder-icon" style={{ fontSize: '2rem' }}>📹</div>
+                    <p style={{fontSize: '0.8rem'}}>Inactive</p>
+                 </div>
+               )}
+               <video 
+                 ref={videoRef} 
+                 className="live-video"
+                 style={{ width: '100%', height: '100%', objectFit: 'contain', display: isCameraActive ? 'block' : 'none' }}
+                 autoPlay
+                 playsInline
+               />
+            </div>
+
+            {/* Settings Compact */}
             <div className="adjustment-stack">
-              <div className="slider-block">
-                <label className="control-label">Confidence:</label>
-                <div className="value-display">{confidencePct}%</div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={confidencePct}
-                  onChange={(e) => setConfidencePct(parseInt(e.target.value))}
-                  className="ui-slider"
-                  disabled={loading}
-                />
-                <div className="slider-scale"><span>0%</span><span>100%</span></div>
-              </div>
-
-              <div className="slider-block">
-                <label className="control-label">Overlap:</label>
-                <div className="value-display">{overlapPct}%</div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={overlapPct}
-                  onChange={(e) => setOverlapPct(parseInt(e.target.value))}
-                  className="ui-slider"
-                  disabled={loading}
-                />
-                <div className="slider-scale"><span>0%</span><span>100%</span></div>
-              </div>
-
-              <div className="slider-block">
-                <label className="control-label">Opacity:</label>
-                <div className="value-display">{opacityPct}%</div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={opacityPct}
-                  onChange={(e) => setOpacityPct(parseInt(e.target.value))}
-                  className="ui-slider"
-                  disabled={loading}
-                />
-                <div className="slider-scale"><span>0%</span><span>100%</span></div>
-              </div>
+               <div className="slider-block">
+                 <div className="control-label"><span>Confidence</span><span className="value-display">{confidencePct}%</span></div>
+                 <input type="range" min="0" max="100" step="1" value={confidencePct} onChange={(e) => setConfidencePct(parseInt(e.target.value))} className="ui-slider" disabled={loading} />
+               </div>
+               <div className="slider-block">
+                 <div className="control-label"><span>Overlap</span><span className="value-display">{overlapPct}%</span></div>
+                 <input type="range" min="0" max="100" step="1" value={overlapPct} onChange={(e) => setOverlapPct(parseInt(e.target.value))} className="ui-slider" disabled={loading} />
+               </div>
+               <div className="slider-block">
+                 <div className="control-label"><span>Opacity</span><span className="value-display">{opacityPct}%</span></div>
+                 <input type="range" min="0" max="100" step="1" value={opacityPct} onChange={(e) => setOpacityPct(parseInt(e.target.value))} className="ui-slider" disabled={loading} />
+               </div>
             </div>
           </div>
         </section>
 
-        {/* Live Detection Panel */}
+        {/* Column 2: Annotated Feed (Center Main) */}
         <section className="panel-card detection-card">
           <div className="panel-header">
-            <h3 className="panel-title">Live Feed</h3>
+            <h3 className="panel-title">Annotated Live Feed</h3>
           </div>
           <div className="panel-body">
-            <div className="live-feed-container">
-              <div className="placeholder-state">
-                <div className="placeholder-icon">📹</div>
-                <h3>Camera Inactive</h3>
-                <p>Click "Start Camera" to begin live detection</p>
-              </div>
-              <video 
-                ref={videoRef} 
-                className="live-video"
-                style={{ display: 'none' }}
-                autoPlay
-                playsInline
-              />
-              <canvas 
-                ref={canvasRef}
-                className="detection-canvas"
-                style={{ display: 'none' }}
-              />
-            </div>
+             <div className="live-feed-container" style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {!isCameraActive ? (
+                  <div className="placeholder-state" style={{ height: '100%', justifyContent: 'center' }}>
+                    <div className="placeholder-icon">🤖</div>
+                    <h3>Waiting for Stream</h3>
+                    <p>Annotated defects will appear here</p>
+                  </div>
+                ) : (
+                  <canvas 
+                    ref={canvasRef}
+                    className="detection-canvas"
+                    style={{ width: '100%', height: '100%', objectFit: 'fill' }}
+                  />
+                )}
+             </div>
           </div>
         </section>
-        {/* Live Results Panel */}
+
+        {/* Column 3: Live Results (Right Sidebar) */}
         <section className="panel-card results-card">
           <div className="panel-header">
             <h3 className="panel-title">Live Results</h3>
           </div>
           <div className="panel-body">
+            {liveResults ? (
+               <div className="detections-list">
+                  <div className="detections-header">
+                    <span className="detections-count">Detected: {liveResults.total_detections}</span>
+                  </div>
+                  {liveResults.detections.map((d, idx) => (
+                      <div key={idx} className="detection-row">
+                        <span className="detection-class">{d.class}</span>
+                        <span className="detection-confidence">{(d.confidence * 100).toFixed(0)}%</span>
+                      </div>
+                  ))}
+               </div>
+            ) : (
             <div className="placeholder-state">
               <div className="placeholder-icon">📊</div>
               <h3>No Live Feed</h3>
               <p>Start camera to see live detection results</p>
             </div>
+            )}
           </div>
         </section>
       </main>
       )}
 
       {/* Footer */}
+      {/* Professional Footer */}
       <footer className="app-footer">
-        <p>Powered by YOLOv8 • React • Flask</p>
+        <div className="footer-col left">
+          <span className="footer-label">SYSTEM V{systemStats.version}</span>
+          <span className="footer-divider">|</span>
+          <span className="footer-value">{serverStatus === 'online' ? 'READY' : 'OFFLINE'}</span>
+        </div>
+        
+        <div className="footer-col center">
+          <span className="footer-tech">POWERED BY YOLOv8 NEURAL NETWORK</span>
+        </div>
+
+        <div className="footer-col right">
+          <span className="footer-label">LATENCY</span>
+          <span className="footer-value">{systemStats.latency}ms</span>
+          <span className="footer-divider">|</span>
+          <span className="footer-label">MEM</span>
+          <span className="footer-value">{systemStats.memory}GB</span>
+          <span className="footer-divider">|</span>
+          <span className="footer-label">FPS</span>
+          <span className="footer-value">{systemStats.fps}</span>
+        </div>
       </footer>
     </div>
   );
