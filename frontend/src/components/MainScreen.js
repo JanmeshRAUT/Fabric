@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import './MainScreen.css';
+import '../styles/MainScreen.css';
 import ImageUpload from './ImageUpload';
 import DetectionHistory from './DetectionHistory';
 import ModelManagement from './ModelManagement';
@@ -18,9 +18,14 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const [showHistory, setShowHistory] = useState(false);
   const [showModelMgmt, setShowModelMgmt] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [cameras, setCameras] = useState([]);
+  const [selectedCameraId, setSelectedCameraId] = useState('');
+  const [targetFps, setTargetFps] = useState(5);
+  const [wsStatus, setWsStatus] = useState('disconnected'); // disconnected, connecting, open, error
   const videoRef = React.useRef(null);
   const canvasRef = React.useRef(null);
   const streamRef = React.useRef(null);
+  const fpsCounterRef = React.useRef(0); // Count frames for real FPS calculation
 
   const API_URL = 'http://localhost:5000/api/detect';
   const HEALTH_URL = 'http://localhost:5000/api/health';
@@ -28,6 +33,17 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
 
   useEffect(() => {
     checkServerHealth();
+    // Enumerate cameras
+    navigator.mediaDevices.enumerateDevices()
+      .then(devices => {
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        setCameras(videoDevices);
+        if (videoDevices.length > 0) {
+          setSelectedCameraId(videoDevices[0].deviceId);
+        }
+      })
+      .catch(err => console.error("Error enumerating devices:", err));
+
     // Cleanup camera on unmount
     return () => {
       stopCamera();
@@ -52,11 +68,22 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const frameIntervalRef = React.useRef(null);
 
   const startCamera = async () => {
+    if (!selectedCameraId) {
+      alert("No camera selected!");
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: 640, height: 480 },
+      const constraints = {
+        video: { 
+          deviceId: { exact: selectedCameraId },
+          width: 640, 
+          height: 480 
+        },
         audio: false
-      });
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -74,10 +101,12 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const connectWebSocket = () => {
     if (websocketRef.current) return;
     
+    setWsStatus('connecting');
     const ws = new WebSocket(WS_URL);
     
     ws.onopen = () => {
       console.log('Connected to live detection server');
+      setWsStatus('open');
       // Start sending frames
       startFrameStreaming();
     };
@@ -85,6 +114,9 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.success && canvasRef.current) {
+        // Increment FPS counter
+        fpsCounterRef.current += 1;
+
         const ctx = canvasRef.current.getContext('2d');
         const img = new Image();
         img.onload = () => {
@@ -99,12 +131,22 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
+      setWsStatus('error');
     };
     
+    ws.onclose = () => {
+      setWsStatus('disconnected');
+    };
+
     websocketRef.current = ws;
   };
 
   const startFrameStreaming = () => {
+    // Clear existing if any (e.g. if changing FPS)
+    if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+
+    const intervalMs = 1000 / targetFps;
+
     frameIntervalRef.current = setInterval(() => {
       if (!videoRef.current || !websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) return;
       
@@ -122,8 +164,16 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
         overlap: 1 - (overlapPct / 100)
       }));
       
-    }, 200); // 5 FPS
+    }, intervalMs);
   };
+
+  // Allow updating FPS while running
+  useEffect(() => {
+    if (isCameraActive && wsStatus === 'open') {
+      startFrameStreaming();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetFps]);
 
   const stopCamera = () => {
     if (streamRef.current) {
@@ -146,6 +196,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     }
     
     setIsCameraActive(false);
+    setWsStatus('disconnected');
     setLiveResults(null);
   };
 
@@ -267,15 +318,18 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   });
 
   useEffect(() => {
-    // Simulate live telemetry
+    // Simulate live telemetry (latency/memory), but use REAL FPS
     const telemetryInterval = setInterval(() => {
+      const currentFps = fpsCounterRef.current;
+      fpsCounterRef.current = 0; // Reset counter every second
+
       setSystemStats(prev => ({
         ...prev,
-        latency: Math.floor(Math.random() * (45 - 15) + 15), // Random 15-45ms
-        memory: +(4.0 + Math.random() * 0.5).toFixed(1), // Random 4.0-4.5GB
-        fps: Math.floor(Math.random() * (60 - 28) + 28)
+        latency: Math.floor(Math.random() * (45 - 15) + 15), // Random 15-45ms (simulated)
+        memory: +(4.0 + Math.random() * 0.5).toFixed(1), // Random 4.0-4.5GB (simulated)
+        fps: currentFps // REAL FPS
       }));
-    }, 2000);
+    }, 1000); // Update exactly every 1 second
 
     return () => clearInterval(telemetryInterval);
   }, []);
@@ -573,25 +627,65 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
           </div>
           <div className="panel-body">
             {/* Camera Controls */}
-            <div className="camera-controls">
-              <button 
-                className="camera-button"
-                onClick={startCamera}
-                disabled={isCameraActive}
-              >
-                📹 Start
-              </button>
-              <button 
-                className="camera-button secondary"
-                onClick={stopCamera}
-                disabled={!isCameraActive}
-              >
-                ⏹️ Stop
-              </button>
+            <div className="camera-controls-stack" style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '15px' }}>
+              <div className="control-group">
+                <label className="label-text" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Camera Source</label>
+                <select 
+                  className="camera-select"
+                  value={selectedCameraId}
+                  onChange={(e) => setSelectedCameraId(e.target.value)}
+                  disabled={isCameraActive}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-primary)' }}
+                >
+                  {cameras.length === 0 && <option value="">Finding cameras...</option>}
+                  {cameras.map(device => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label || `Camera ${device.deviceId.slice(0, 5)}...`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="camera-actions" style={{ display: 'flex', gap: '10px' }}>
+                <button 
+                  className="camera-button"
+                  onClick={startCamera}
+                  disabled={isCameraActive || !selectedCameraId}
+                  style={{ flex: 1 }}
+                >
+                  START
+                </button>
+                <button 
+                  className="camera-button secondary"
+                  onClick={stopCamera}
+                  disabled={!isCameraActive}
+                  style={{ flex: 1 }}
+                >
+                  STOP
+                </button>
+              </div>
             </div>
 
             {/* Video Area */}
             <div className="live-feed-container" style={{ width: '100%', aspectRatio: '4/3', position: 'relative', background: '#000', borderRadius: '4px', overflow: 'hidden', marginBottom: '1rem' }}>
+               {/* Status Badge */}
+               {isCameraActive && (
+                 <div className="stream-status" style={{ 
+                    position: 'absolute', 
+                    top: '10px', 
+                    right: '10px', 
+                    zIndex: 10,
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontSize: '0.7rem',
+                    fontWeight: 'bold',
+                    background: wsStatus === 'open' ? 'rgba(16, 185, 129, 0.8)' : 'rgba(239, 68, 68, 0.8)',
+                    color: 'white'
+                 }}>
+                   {wsStatus === 'open' ? 'LIVE' : wsStatus.toUpperCase()}
+                 </div>
+               )}
+
                {!isCameraActive && (
                  <div className="placeholder-state" style={{ position: 'absolute', inset: 0, justifyContent: 'center', height: '100%' }}>
                     <div className="placeholder-icon" style={{ fontSize: '2rem' }}>📹</div>
@@ -610,16 +704,16 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
             {/* Settings Compact */}
             <div className="adjustment-stack">
                <div className="slider-block">
+                 <div className="control-label"><span>FPS Target</span><span className="value-display">{targetFps}</span></div>
+                 <input type="range" min="1" max="10" step="1" value={targetFps} onChange={(e) => setTargetFps(parseInt(e.target.value))} className="ui-slider" />
+               </div>
+               <div className="slider-block">
                  <div className="control-label"><span>Confidence</span><span className="value-display">{confidencePct}%</span></div>
                  <input type="range" min="0" max="100" step="1" value={confidencePct} onChange={(e) => setConfidencePct(parseInt(e.target.value))} className="ui-slider" disabled={loading} />
                </div>
                <div className="slider-block">
                  <div className="control-label"><span>Overlap</span><span className="value-display">{overlapPct}%</span></div>
                  <input type="range" min="0" max="100" step="1" value={overlapPct} onChange={(e) => setOverlapPct(parseInt(e.target.value))} className="ui-slider" disabled={loading} />
-               </div>
-               <div className="slider-block">
-                 <div className="control-label"><span>Opacity</span><span className="value-display">{opacityPct}%</span></div>
-                 <input type="range" min="0" max="100" step="1" value={opacityPct} onChange={(e) => setOpacityPct(parseInt(e.target.value))} className="ui-slider" disabled={loading} />
                </div>
             </div>
           </div>

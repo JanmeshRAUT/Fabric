@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import './ImageUpload.css';
+import '../styles/ImageUpload.css';
 
 const ImageUpload = ({ onImageUpload, loading }) => {
   const fileInputRef = useRef(null);

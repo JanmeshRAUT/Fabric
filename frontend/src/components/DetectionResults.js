@@ -1,5 +1,5 @@
 import React from 'react';
-import './DetectionResults.css';
+import '../styles/DetectionResults.css';
 
 const DetectionResults = ({ results }) => {
   if (!results) return null;

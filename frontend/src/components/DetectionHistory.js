@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import './DetectionHistory.css';
+import '../styles/DetectionHistory.css';
 import axios from 'axios';
 
 const HISTORY_URL = 'http://localhost:5000/api/history';

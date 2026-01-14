@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import './ModelManagement.css';
+import '../styles/ModelManagement.css';
 import axios from 'axios';
 
 const API_BASE = 'http://localhost:5000/api';
