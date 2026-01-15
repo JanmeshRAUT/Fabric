@@ -1,4 +1,6 @@
 /* ImageUpload.css */
+/* Uses premium aesthetics matching MainScreen */
+
 .image-upload-container {
   width: 100%;
   height: 100%;
@@ -14,24 +16,51 @@
   justify-content: center;
   text-align: center;
   cursor: pointer;
-  padding: var(--spacing-lg);
-  border: 1px dashed transparent; /* Border handled by parent container usually, but reset here */
-  border-radius: var(--radius-md);
-  transition: all var(--transition-base);
+  padding: 24px;
+  border: 1px dashed transparent; /* Border is visual only, handled below */
+  border-radius: 12px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   min-height: 200px;
   position: relative;
   width: 100%;
   height: 100%;
+  overflow: hidden;
+}
+
+/* Animated border effect on hover/active */
+.upload-area::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  padding: 2px;
+  background: linear-gradient(45deg, transparent 40%, rgba(59, 130, 246, 0.3), transparent 60%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.5;
+  transition: opacity 0.3s;
+}
+
+.upload-area:hover::before {
+  opacity: 1;
 }
 
 .upload-area.drag-active {
   background: rgba(59, 130, 246, 0.1);
-  border-color: var(--primary-500);
+  box-shadow: inset 0 0 20px rgba(59, 130, 246, 0.2);
+}
+
+.upload-area.drag-active::before {
+  background: linear-gradient(45deg, var(--primary-500), var(--primary-300));
+  opacity: 1;
+  animation: borderRotate 2s linear infinite;
 }
 
 .upload-area.disabled {
   pointer-events: none;
-  opacity: 0.6;
+  opacity: 0.5;
+  filter: grayscale(100%);
 }
 
 /* Prompt State */
@@ -39,47 +68,55 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: 12px;
   color: var(--text-tertiary);
-  transition: transform var(--transition-base);
+  transition: transform 0.3s;
+  z-index: 2;
 }
 
 .upload-area:hover .upload-prompt {
   color: var(--text-secondary);
-  transform: translateY(-2px);
+  transform: translateY(-4px);
 }
 
 .upload-icon {
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   color: var(--primary-400);
-  margin-bottom: var(--spacing-sm);
-  opacity: 0.8;
-  transition: all var(--transition-base);
+  margin-bottom: 8px;
+  opacity: 0.7;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.2));
 }
 
 .upload-area:hover .upload-icon {
   opacity: 1;
-  transform: scale(1.1);
+  transform: scale(1.1) rotate(5deg);
   color: var(--primary-500);
+  filter: drop-shadow(0 0 15px rgba(59, 130, 246, 0.4));
 }
 
 .upload-prompt h3 {
-  font-size: var(--text-base);
-  font-weight: 600;
+  font-size: 1.1rem;
+  font-weight: 700;
   color: var(--text-primary);
   margin: 0;
+  letter-spacing: 0.5px;
 }
 
 .upload-prompt p {
-  font-size: var(--text-sm);
+  font-size: 0.85rem;
   margin: 0;
+  max-width: 200px;
+  line-height: 1.5;
 }
 
 .file-types {
-  font-size: var(--text-xs) !important;
-  opacity: 0.7;
-  margin-top: var(--spacing-xs) !important;
+  font-size: 0.7rem !important;
+  opacity: 0.6;
+  margin-top: 8px !important;
+  text-transform: uppercase;
+  letter-spacing: 1px;
 }
 
 /* Preview State */
@@ -92,36 +129,46 @@
   justify-content: center;
   position: relative;
   overflow: hidden;
+  padding: 10px;
 }
 
 .preview-image {
   max-width: 100%;
-  max-height: 250px; /* Limit height to fit in panel */
+  max-height: 220px;
   object-fit: contain;
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-md);
-  margin-bottom: var(--spacing-md);
+  border-radius: 8px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 16px;
+  transition: transform 0.3s;
+}
+
+.preview-image:hover {
+  transform: scale(1.02);
 }
 
 .change-image-btn {
-  padding: var(--spacing-sm) var(--spacing-lg);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color-strong);
+  padding: 8px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-primary);
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
+  border-radius: 8px;
+  font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all var(--transition-fast);
-  box-shadow: var(--shadow-sm);
+  transition: all 0.2s;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .change-image-btn:hover {
-  background: var(--bg-tertiary);
+  background: rgba(59, 130, 246, 0.1);
   border-color: var(--primary-500);
   color: var(--primary-400);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 12px rgba(0, 0, 0, 0.2);
 }
 
 .change-image-btn:disabled {

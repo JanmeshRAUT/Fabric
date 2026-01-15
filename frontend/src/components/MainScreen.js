@@ -346,15 +346,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
       )}
 
       {showModelMgmt && (
-        <div className="modal-overlay" onClick={() => setShowModelMgmt(false)}>
-          <div className="modal-content large" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>Model Management</h2>
-              <button className="close-btn" onClick={() => setShowModelMgmt(false)}>✕</button>
-            </div>
-            <ModelManagement />
-          </div>
-        </div>
+        <ModelManagement onClose={() => setShowModelMgmt(false)} />
       )}
 
       {/* Professional Header Structure */}

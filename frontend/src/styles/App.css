@@ -106,26 +106,44 @@
   --z-sticky: 20;
   --z-modal: 100;
   --z-tooltip: 110;
+
+  /* Gradients */
+  --gradient-text-start: #ffffff;
+  --gradient-text-end: #93c5fd;
 }
 
 /* Light Theme */
+/* Light Theme */
 :root[data-theme="light"] {
-  --bg-primary: #f8fafc;
-  --bg-secondary: #f1f5f9;
-  --bg-tertiary: #e2e8f0;
-  --bg-panel: rgba(255, 255, 255, 0.8);
-  --bg-panel-hover: rgba(241, 245, 249, 0.9);
-  --bg-input: rgba(226, 232, 240, 0.8);
-  --bg-overlay: rgba(15, 23, 42, 0.5);
+  /* Backgrounds */
+  --bg-primary: #F9FAFB;   /* Soft White */
+  --bg-secondary: #FFFFFF; /* Surface / Cards */
+  --bg-tertiary: #F3F4F6;  /* Neutral separator */
+  --bg-panel: rgba(255, 255, 255, 0.95); /* High opacity for clean look */
+  --bg-panel-hover: #FFFFFF;
+  --bg-input: #FFFFFF;
+  --bg-overlay: rgba(17, 24, 39, 0.7); /* Charcoal overlay */
 
-  --text-primary: #0f172a;
-  --text-secondary: #334155;
-  --text-tertiary: #64748b;
-  --text-disabled: #94a3b8;
+  /* Text Colors */
+  --text-primary: #111827;   /* Charcoal */
+  --text-secondary: #6B7280; /* Cool Gray */
+  --text-tertiary: #9CA3AF;  /* Light Gray */
+  --text-disabled: #9CA3AF;
 
-  --border-color: rgba(71, 85, 105, 0.2);
-  --border-color-strong: rgba(37, 99, 235, 0.3);
-  --border-color-focus: rgba(37, 99, 235, 0.8);
+  /* Primary Overrides for Light Mode */
+  --primary-400: #60A5FA;
+  --primary-500: #3B82F6; /* Secondary (Steel Blue) */
+  --primary-600: #1E3A8A; /* Primary Actions (Indigo Blue) */
+  --primary-700: #172554; /* Darker Indigo */
+
+  /* Borders */
+  --border-color: #D1D5DB; /* Slightly darker for better definition */
+  --border-color-strong: #BFDBFE;
+  --border-color-focus: #1E3A8A;
+
+  /* Gradients Overrides */
+  --gradient-text-start: #111827; /* Charcoal */
+  --gradient-text-end: #3B82F6;   /* Steel Blue */
 }
 
 /* ========================================
