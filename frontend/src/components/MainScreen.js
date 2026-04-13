@@ -20,8 +20,10 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const [progress, setProgress] = useState(0);
   const [cameras, setCameras] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
+  const [resolution, setResolution] = useState('640x480');
   const [targetFps, setTargetFps] = useState(5);
   const [wsStatus, setWsStatus] = useState('disconnected'); // disconnected, connecting, open, error
+  const [isMaximized, setIsMaximized] = useState(false);
   const videoRef = React.useRef(null);
   const canvasRef = React.useRef(null);
   const streamRef = React.useRef(null);
@@ -74,11 +76,12 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     }
 
     try {
+      const [width, height] = resolution.split('x').map(Number);
       const constraints = {
         video: { 
           deviceId: { exact: selectedCameraId },
-          width: 640, 
-          height: 480 
+          width: { ideal: width },
+          height: { ideal: height }
         },
         audio: false
       };
@@ -428,7 +431,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
 
       {/* Dashboard Grid: Upload+Adjustment, Detection, Results */}
       {activeTab === 'upload' && (
-      <main className="dashboard-grid">
+      <main className={`dashboard-grid ${isMaximized ? 'maximized' : ''}`}>
         {/* Upload + Adjustment Panel */}
         <section className="panel-card upload-card">
           <div className="panel-header">
@@ -506,6 +509,15 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
         <section className="panel-card detection-card">
           <div className="panel-header">
             <h3 className="panel-title">Detection</h3>
+            <button 
+              className="icon-btn" 
+              onClick={() => setIsMaximized(!isMaximized)}
+              title={isMaximized ? "Exit Fullscreen" : "Maximize View"}
+            >
+              <span className="btn-icon" style={{ fontSize: '1rem' }}>
+                {isMaximized ? '↙' : '↗'}
+              </span>
+            </button>
           </div>
           <div className="panel-body">
             {error && (
@@ -611,7 +623,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
 
       {/* Live Detection Tab */}
       {activeTab === 'live' && (
-      <main className="dashboard-grid">
+      <main className={`dashboard-grid ${isMaximized ? 'maximized' : ''}`}>
         {/* Column 1: Live Feed (Raw) + Settings (Left Sidebar) */}
         <section className="panel-card upload-card">
           <div className="panel-header">
@@ -635,6 +647,22 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
                       {device.label || `Camera ${device.deviceId.slice(0, 5)}...`}
                     </option>
                   ))}
+                </select>
+              </div>
+
+              <div className="control-group">
+                <label className="label-text" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Resolution</label>
+                <select 
+                  className="camera-select"
+                  value={resolution}
+                  onChange={(e) => setResolution(e.target.value)}
+                  disabled={isCameraActive}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-primary)' }}
+                >
+                  <option value="640x480">VGA (640x480)</option>
+                  <option value="800x600">SVGA (800x600)</option>
+                  <option value="1280x720">HD (1280x720)</option>
+                  <option value="1920x1080">Full HD (1920x1080)</option>
                 </select>
               </div>
 
@@ -715,6 +743,15 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
         <section className="panel-card detection-card">
           <div className="panel-header">
             <h3 className="panel-title">Annotated Live Feed</h3>
+            <button 
+              className="icon-btn" 
+              onClick={() => setIsMaximized(!isMaximized)}
+              title={isMaximized ? "Exit Fullscreen" : "Maximize View"}
+            >
+              <span className="btn-icon" style={{ fontSize: '1rem' }}>
+                {isMaximized ? '↙' : '↗'}
+              </span>
+            </button>
           </div>
           <div className="panel-body">
              <div className="live-feed-container" style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
