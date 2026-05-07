@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import '../styles/MainScreen.css';
 import ImageUpload from './ImageUpload';
 import DetectionHistory from './DetectionHistory';
@@ -53,9 +53,9 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     return () => {
       stopCamera();
     };
-  }, []);
+  }, [checkServerHealth, stopCamera]);
 
-  const checkServerHealth = async () => {
+  const checkServerHealth = useCallback(async () => {
     try {
       const response = await axios.get(HEALTH_URL);
       if (response.data.status === 'healthy') {
@@ -66,7 +66,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     } catch (err) {
       setServerStatus('offline');
     }
-  };
+  }, [HEALTH_URL]);
 
   const [liveResults, setLiveResults] = useState(null);
   const websocketRef = React.useRef(null);
@@ -181,7 +181,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetFps]);
 
-  const stopCamera = () => {
+  const stopCamera = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -204,7 +204,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     setIsCameraActive(false);
     setWsStatus('disconnected');
     setLiveResults(null);
-  };
+  }, []);
 
 
   // Model info panel removed per request
