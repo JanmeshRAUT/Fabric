@@ -1,3 +1,13 @@
+---
+title: Fabric Defect Backend
+emoji: 🧵
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Fabric Fault Detection — Training
 
 Quick helper files to train a YOLOv8 model on the provided dataset.
