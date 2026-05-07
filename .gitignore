@@ -41,7 +41,8 @@ backend/results/
 backend/detection_history.json
 .env
 backend/.env
-*.pt
+# Models (Tracked via LFS)
+# *.pt
 *.png
 *.jpg
 *.jpeg
