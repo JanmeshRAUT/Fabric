@@ -24,10 +24,10 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const [targetFps, setTargetFps] = useState(5);
   const [wsStatus, setWsStatus] = useState('disconnected'); // disconnected, connecting, open, error
   const [isMaximized, setIsMaximized] = useState(false);
-  const videoRef = React.useRef(null);
-  const canvasRef = React.useRef(null);
-  const streamRef = React.useRef(null);
-  const fpsCounterRef = React.useRef(0); // Count frames for real FPS calculation
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const fpsCounterRef = useRef(0); // Count frames for real FPS calculation
 
   const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000';
   const WS_BASE_URL = process.env.REACT_APP_WS_BASE_URL || 'ws://localhost:5000';
@@ -35,6 +35,48 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const API_URL = `${API_BASE_URL}/api/detect`;
   const HEALTH_URL = `${API_BASE_URL}/api/health`;
   const WS_URL = `${WS_BASE_URL}/ws/detect`;
+
+  const [liveResults, setLiveResults] = useState(null);
+  const websocketRef = useRef(null);
+  const frameIntervalRef = useRef(null);
+
+  const checkServerHealth = useCallback(async () => {
+    try {
+      const response = await axios.get(HEALTH_URL);
+      if (response.data.status === 'healthy') {
+        setServerStatus('online');
+      } else {
+        setServerStatus('offline');
+      }
+    } catch (err) {
+      setServerStatus('offline');
+    }
+  }, [HEALTH_URL]);
+
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+      videoRef.current.style.display = 'none';
+    }
+    
+    if (frameIntervalRef.current) {
+      clearInterval(frameIntervalRef.current);
+      frameIntervalRef.current = null;
+    }
+    
+    if (websocketRef.current) {
+      websocketRef.current.close();
+      websocketRef.current = null;
+    }
+    
+    setIsCameraActive(false);
+    setWsStatus('disconnected');
+    setLiveResults(null);
+  }, []);
 
   useEffect(() => {
     checkServerHealth();
@@ -54,23 +96,6 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
       stopCamera();
     };
   }, [checkServerHealth, stopCamera]);
-
-  const checkServerHealth = useCallback(async () => {
-    try {
-      const response = await axios.get(HEALTH_URL);
-      if (response.data.status === 'healthy') {
-        setServerStatus('online');
-      } else {
-        setServerStatus('offline');
-      }
-    } catch (err) {
-      setServerStatus('offline');
-    }
-  }, [HEALTH_URL]);
-
-  const [liveResults, setLiveResults] = useState(null);
-  const websocketRef = React.useRef(null);
-  const frameIntervalRef = React.useRef(null);
 
   const startCamera = async () => {
     if (!selectedCameraId) {
@@ -181,30 +206,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetFps]);
 
-  const stopCamera = useCallback(() => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-      videoRef.current.style.display = 'none';
-    }
-    
-    if (frameIntervalRef.current) {
-      clearInterval(frameIntervalRef.current);
-      frameIntervalRef.current = null;
-    }
-    
-    if (websocketRef.current) {
-      websocketRef.current.close();
-      websocketRef.current = null;
-    }
-    
-    setIsCameraActive(false);
-    setWsStatus('disconnected');
-    setLiveResults(null);
-  }, []);
+  // Model info panel removed per request
 
 
   // Model info panel removed per request
