@@ -4,8 +4,8 @@ echo Starting Fabric Fault Detection System
 echo ========================================
 echo.
 
-echo Starting Flask Backend...
-start cmd /k "cd backend && python app.py"
+echo Starting FastAPI Backend...
+start cmd /k "cd backend && python run.py"
 
 timeout /t 3 /nobreak >nul
 

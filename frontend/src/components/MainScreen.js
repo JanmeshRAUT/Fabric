@@ -292,7 +292,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
         if (err.response) {
           setError(`Server error: ${err.response.data.error || err.response.statusText}`);
         } else if (err.request) {
-          setError('Cannot connect to backend server. Make sure Flask is running on http://localhost:5000');
+          setError(`Cannot connect to backend server at ${API_BASE_URL}. Please check if the service is online.`);
         } else {
           setError('Error processing image. Please try again.');
         }

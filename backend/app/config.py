@@ -13,6 +13,12 @@ class Config:
     
     # Fallback paths
     BASE_MODEL_PATH = os.environ.get('BASE_MODEL_PATH', os.path.join(PROJECT_ROOT, 'yolov8s.pt'))
+    if not os.path.exists(BASE_MODEL_PATH):
+        # Try relative to backend dir
+        BASE_MODEL_PATH = os.path.join(BACKEND_DIR, 'yolov8s.pt')
+    if not os.path.exists(BASE_MODEL_PATH):
+        # Try root inside container
+        BASE_MODEL_PATH = '/app/yolov8s.pt'
     
     # Data Storage
     UPLOAD_FOLDER = os.path.join(BACKEND_DIR, 'uploads')

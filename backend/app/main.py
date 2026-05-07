@@ -50,6 +50,20 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+@app.get("/")
+async def root():
+    return {
+        "message": "Fabric Defect Detection API is running",
+        "version": "2.0.0",
+        "endpoints": {
+            "health": "/api/health",
+            "detect": "/api/detect",
+            "models": "/api/models",
+            "monitor": "/monitor"
+        },
+        "documentation": "/docs"
+    }
+
 from fastapi.responses import HTMLResponse
 
 @app.get("/monitor", response_class=HTMLResponse)
@@ -287,6 +301,19 @@ async def get_stats():
             'uptime': 'N/A', # Add uptime logic if needed
             'environment': 'Hugging Face Space' if os.environ.get('SPACE_ID') else 'Local'
         }
+    }
+
+@app.get("/api/model-info")
+async def get_model_info():
+    """Get information about the loaded model for compatibility"""
+    return {
+        'model_path': model_manager.current_model_path,
+        'classes': list(Config.CLASS_NAMES.values()),
+        'num_classes': len(Config.CLASS_NAMES),
+        'confidence_threshold': model_manager.confidence_threshold,
+        'model_exists': os.path.exists(model_manager.current_model_path) if model_manager.current_model_path else False,
+        'available_models': list(model_manager.available_models.keys()),
+        'ab_test_enabled': model_manager.ab_test_enabled
     }
 
 # --- WebSocket for Live Feed ---
