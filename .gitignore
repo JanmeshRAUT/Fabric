@@ -41,3 +41,12 @@ backend/results/
 backend/detection_history.json
 .env
 backend/.env
+*.pt
+*.png
+*.jpg
+*.jpeg
+*.webp
+runs/
+train/
+valid/
+test/
