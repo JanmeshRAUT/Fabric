@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/api/(.*)",
+      "destination": "https://jerryjr1705-fabric-backend.hf.space/api/$1"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
