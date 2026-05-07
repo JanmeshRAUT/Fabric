@@ -7,11 +7,12 @@ class Config:
     PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
 
     # Model Configuration
-    # Prioritize the trained model
-    MODEL_PATH = os.path.join(PROJECT_ROOT, 'runs', 'fabric', 'yolov8_major_project', 'weights', 'best.pt')
+    # In HF Spaces, we'll put models in the root or a 'models' folder
+    MODEL_REPO = os.environ.get('HF_MODEL_REPO', 'JerryJR1705/fabricModel')
+    MODEL_PATH = os.environ.get('MODEL_PATH', os.path.join(PROJECT_ROOT, 'runs', 'fabric', 'yolov8_major_project', 'weights', 'best.pt'))
     
     # Fallback paths
-    BASE_MODEL_PATH = os.path.join(PROJECT_ROOT, 'yolov8s.pt')
+    BASE_MODEL_PATH = os.environ.get('BASE_MODEL_PATH', os.path.join(PROJECT_ROOT, 'yolov8s.pt'))
     
     # Data Storage
     UPLOAD_FOLDER = os.path.join(BACKEND_DIR, 'uploads')

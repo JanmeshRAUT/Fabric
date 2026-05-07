@@ -1,3 +1,13 @@
+---
+title: Fabric Defect Backend
+emoji: 🧵
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Fabric Defect Detection - Backend API
 
 Flask-based REST API for fabric defect detection using YOLO.

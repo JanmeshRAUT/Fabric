@@ -55,5 +55,33 @@ class HistoryManager:
             self.history = []
         self.save_history()
 
+    def get_stats(self):
+        """Calculate aggregate statistics for monitoring"""
+        total_requests = len(self.history)
+        if total_requests == 0:
+            return {
+                'total_requests': 0,
+                'total_detections': 0,
+                'avg_detections': 0,
+                'class_distribution': {},
+                'recent_activity': []
+            }
+
+        total_detections = sum(r.get('detections', 0) for r in self.history)
+        
+        # Class distribution
+        class_counts = {}
+        for r in self.history:
+            for cls in r.get('detection_classes', []):
+                class_counts[cls] = class_counts.get(cls, 0) + 1
+        
+        return {
+            'total_requests': total_requests,
+            'total_detections': total_detections,
+            'avg_detections': round(total_detections / total_requests, 2),
+            'class_distribution': class_counts,
+            'recent_activity': self.history[-10:] # last 10 records
+        }
+
 # Create singleton instance
 history_manager = HistoryManager(Config.HISTORY_FILE)

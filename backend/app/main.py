@@ -5,6 +5,10 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 import logging
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 import io
 import json
 import base64
@@ -45,6 +49,76 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+
+from fastapi.responses import HTMLResponse
+
+@app.get("/monitor", response_class=HTMLResponse)
+async def monitor_dashboard():
+    stats = history_manager.get_stats()
+    
+    # Simple HTML/JS for dashboard
+    html_content = f"""
+    <html>
+        <head>
+            <title>Fabric Defect Monitor</title>
+            <style>
+                body {{ font-family: sans-serif; background: #f4f4f9; padding: 20px; }}
+                .card {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }}
+                h1 {{ color: #333; }}
+                .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }}
+                .stat-item {{ text-align: center; }}
+                .stat-value {{ font-size: 2em; font-weight: bold; color: #4a90e2; }}
+                .stat-label {{ color: #666; font-size: 0.9em; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+                th, td {{ padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }}
+                th {{ background: #f8f8f8; }}
+            </style>
+        </head>
+        <body>
+            <h1>🧵 Fabric Defect Monitoring Dashboard</h1>
+            
+            <div class="card">
+                <h2>System Stats</h2>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value">{stats['total_requests']}</div>
+                        <div class="stat-label">Total Images Processed</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">{stats['total_detections']}</div>
+                        <div class="stat-label">Total Defects Detected</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">{stats['avg_detections']}</div>
+                        <div class="stat-label">Avg Defects Per Image</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Defect Type Distribution</h2>
+                <table>
+                    <tr><th>Class Name</th><th>Count</th></tr>
+                    {"".join([f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in stats['class_distribution'].items()])}
+                </table>
+            </div>
+
+            <div class="card">
+                <h2>Recent Activity</h2>
+                <table>
+                    <tr><th>Timestamp</th><th>Detections</th><th>Classes</th></tr>
+                    {"".join([f"<tr><td>{r['timestamp']}</td><td>{r['detections']}</td><td>{', '.join(r['detection_classes'])}</td></tr>" for r in reversed(stats['recent_activity'])])}
+                </table>
+            </div>
+            
+            <script>
+                // Refresh every 30 seconds
+                setTimeout(() => location.reload(), 30000);
+            </script>
+        </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
 # CORS
 app.add_middleware(
@@ -199,6 +273,21 @@ async def get_history(limit: int = 100):
 async def clear_history():
     history_manager.clear_history()
     return {'success': True}
+
+@app.get("/api/stats")
+async def get_stats():
+    return {
+        'success': True,
+        'stats': history_manager.get_stats(),
+        'model_status': {
+            'current': model_manager.current_model_path,
+            'loaded': model_manager.current_model is not None
+        },
+        'system': {
+            'uptime': 'N/A', # Add uptime logic if needed
+            'environment': 'Hugging Face Space' if os.environ.get('SPACE_ID') else 'Local'
+        }
+    }
 
 # --- WebSocket for Live Feed ---
 @app.websocket("/ws/detect")

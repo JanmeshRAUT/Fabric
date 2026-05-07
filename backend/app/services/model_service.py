@@ -4,6 +4,7 @@ from ..config import Config
 import glob
 from pathlib import Path
 import logging
+from huggingface_hub import hf_hub_download
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +23,48 @@ class ModelManager:
         self.initialize_primary_model()
     
     def initialize_primary_model(self):
-        """Try to load the best model, fallback to standard"""
-        # Try configured model first
+        """Try to load the best model, fallback to standard, or download from HF"""
+        # 1. Try local configured model path
         if os.path.exists(Config.MODEL_PATH):
             self.load_model(Config.MODEL_PATH)
-        # Fallback to base model
-        elif os.path.exists(Config.BASE_MODEL_PATH):
+            return
+
+        # 2. Try to download from HF Hub (for best.pt)
+        try:
+            logger.info(f"Attempting to download best.pt from HF Hub: {Config.MODEL_REPO}")
+            # Use HF_TOKEN from environment if available
+            token = os.environ.get('HF_TOKEN')
+            downloaded_path = hf_hub_download(
+                repo_id=Config.MODEL_REPO,
+                filename="best.pt",
+                token=token
+            )
+            if self.load_model(downloaded_path):
+                return
+        except Exception as e:
+            logger.warning(f"Failed to download best.pt from HF: {e}")
+
+        # 3. Fallback to local base model
+        if os.path.exists(Config.BASE_MODEL_PATH):
             self.load_model(Config.BASE_MODEL_PATH)
-        else:
-            # If nothing exists, let ultralytics download yolov8s.pt
-            self.load_model('yolov8s.pt')
+            return
+
+        # 4. Try to download from HF Hub (for yolov8s.pt)
+        try:
+            logger.info(f"Attempting to download yolov8s.pt from HF Hub: {Config.MODEL_REPO}")
+            downloaded_path = hf_hub_download(
+                repo_id=Config.MODEL_REPO,
+                filename="yolov8s.pt",
+                token=os.environ.get('HF_TOKEN')
+            )
+            if self.load_model(downloaded_path):
+                return
+        except Exception as e:
+            logger.warning(f"Failed to download yolov8s.pt from HF: {e}")
+
+        # 5. Last resort: Ultralytics default download
+        logger.info("Falling back to Ultralytics default model download")
+        self.load_model('yolov8s.pt')
             
     def load_available_models(self):
         """Dynamic scan for available YOLO models (.pt files)"""

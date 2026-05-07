@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import '../styles/DetectionHistory.css';
 import axios from 'axios';
 
-const HISTORY_URL = 'http://localhost:5000/api/history';
+const HISTORY_URL = (process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000') + '/api/history';
 
 function DetectionHistory({ onClose }) {
   const [history, setHistory] = useState([]);
@@ -35,7 +35,7 @@ function DetectionHistory({ onClose }) {
   const clearHistory = async () => {
     if (window.confirm('Are you sure you want to clear all history?')) {
       try {
-        await axios.post('http://localhost:5000/api/history/clear');
+        await axios.post(`${HISTORY_URL}/clear`);
         setHistory([]);
         setSelectedRecord(null);
       } catch (err) {

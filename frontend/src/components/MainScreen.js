@@ -29,9 +29,12 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const streamRef = React.useRef(null);
   const fpsCounterRef = React.useRef(0); // Count frames for real FPS calculation
 
-  const API_URL = 'http://localhost:5000/api/detect';
-  const HEALTH_URL = 'http://localhost:5000/api/health';
-  const WS_URL = 'ws://localhost:5000/ws/detect';
+  const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000';
+  const WS_BASE_URL = process.env.REACT_APP_WS_BASE_URL || 'ws://localhost:5000';
+
+  const API_URL = `${API_BASE_URL}/api/detect`;
+  const HEALTH_URL = `${API_BASE_URL}/api/health`;
+  const WS_URL = `${WS_BASE_URL}/ws/detect`;
 
   useEffect(() => {
     checkServerHealth();
