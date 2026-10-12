@@ -1,0 +1,9 @@
+{
+  "name": "fabric-defect-detection",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "cd frontend && npm install && npm run build && mkdir -p ../public && cp -r build/* ../public/",
+    "start": "cd frontend && npm start"
+  }
+}
