@@ -78,6 +78,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     return () => {
       stopCamera();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const checkServerHealth = async () => {
