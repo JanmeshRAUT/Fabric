@@ -17,6 +17,9 @@ import numpy as np
 from PIL import Image
 from contextlib import asynccontextmanager
 from typing import List, Optional
+import cv2
+import threading
+import asyncio
 
 from .config import Config
 from .services.model_service import model_manager
@@ -34,23 +37,58 @@ logging.basicConfig(
 )
 logger = logging.getLogger("FabricDefectApp")
 
+LIVE_IMGSZ = int(os.getenv("LIVE_IMGSZ", 480))
+model_lock = threading.Lock()
+
+def predict_frame(img: np.ndarray, conf: float, iou: float, imgsz: int):
+    with model_lock:
+        if model_manager.current_model is None:
+            return None
+        return model_manager.current_model.predict(
+            source=img,
+            conf=conf,
+            iou=iou,
+            imgsz=imgsz,
+            save=False,
+            verbose=False
+        )
+
 # Lifecycle Events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Fabric Defect Detection System Starting (FastAPI)...")
     Config.init_app(None) # Ensure directories exist
+
+    # Model warmup
+    if model_manager.current_model is not None:
+        try:
+            logger.info(f"Warming up YOLO model with dummy prediction (imgsz={LIVE_IMGSZ})...")
+            dummy_frame = np.zeros((LIVE_IMGSZ, LIVE_IMGSZ, 3), dtype=np.uint8)
+            predict_frame(dummy_frame, 0.25, 0.45, LIVE_IMGSZ)
+            logger.info("YOLO model warmup complete.")
+        except Exception as e:
+            logger.warning(f"Model warmup failed: {e}")
+
     yield
     # Shutdown
     logger.info("Shutting down...")
 
 app = FastAPI(
     title="Fabric Defect Detection API",
+    description="High-performance YOLOv8 API for Fabric Defect Detection with live WebSocket sensor streaming and REST endpoints.",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
+
+@app.get("/", include_in_schema=False)
+async def root():
+    # Redirect root to interactive Swagger UI documentation for HF Spaces visitors
+    return RedirectResponse(url="/docs")
 
 @app.get("/monitor", response_class=HTMLResponse)
 async def monitor_dashboard():
@@ -198,13 +236,14 @@ async def detect_defects(
         iou_thresh = max(0.0, min(1.0, float(overlap)))
 
         # Inference
-        results = model_manager.current_model.predict(
-            source=image_array,
-            conf=conf_thresh,
-            iou=iou_thresh,
-            save=False,
-            verbose=False
-        )
+        with model_lock:
+            results = model_manager.current_model.predict(
+                source=image_array,
+                conf=conf_thresh,
+                iou=iou_thresh,
+                save=False,
+                verbose=False
+            )
 
         # Process Results
         detections = []
@@ -295,68 +334,83 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("WebSocket connected for live detection")
     
+    conn_conf = float(model_manager.confidence_threshold)
+    conn_overlap = 0.45
+
     try:
         while True:
-            # Receive data (expecting blob/bytes or json config)
-            # We expect a JSON string with metadata + base64 image, or just raw bytes?
-            # Easier: Client sends JSON: { "image": "base64...", "confidence": 0.25, "overlap": 0.45 }
-            data = await websocket.receive_text()
-            payload = json.loads(data)
+            message = await websocket.receive()
+            msg_type = message.get("type")
             
-            image_data = payload.get("image") # base64 string
-            if not image_data:
+            if msg_type == "websocket.disconnect":
+                logger.info("WebSocket disconnect received")
+                break
+                
+            # Accept small text messages with settings {confidence, overlap}
+            if "text" in message and message["text"]:
+                try:
+                    payload = json.loads(message["text"])
+                    if "confidence" in payload and payload["confidence"] is not None:
+                        conn_conf = float(payload["confidence"])
+                    if "overlap" in payload and payload["overlap"] is not None:
+                        conn_overlap = float(payload["overlap"])
+                    logger.debug(f"Updated connection settings: conf={conn_conf}, overlap={conn_overlap}")
+                except Exception as e:
+                    logger.warning(f"Failed to parse websocket settings: {e}")
                 continue
                 
-            # Decode image
-            # Remove header if present "data:image/jpeg;base64,"
-            if "base64," in image_data:
-                image_data = image_data.split("base64,")[1]
-            
-            image_bytes = base64.b64decode(image_data)
-            pil_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-            image_array = np.array(pil_image)
-            
-            conf_thresh = float(payload.get("confidence", model_manager.confidence_threshold))
-            iou_thresh = float(payload.get("overlap", 0.45))
-            
-            # Inference
-            results = model_manager.current_model.predict(
-                source=image_array,
-                conf=conf_thresh,
-                iou=iou_thresh,
-                save=False,
-                verbose=False
-            )
-            
-            # Build Result
-            result = results[0]
-            detections = []
-            if result.boxes is not None:
-                for box in result.boxes:
-                    cls_id = int(box.cls[0])
-                    detections.append({
-                        'class': Config.CLASS_NAMES.get(cls_id, f"class_{cls_id}"),
-                        'confidence': float(box.conf[0]),
-                        'bbox': box.xyxy[0].tolist()
+            # Receive each frame as raw JPEG bytes (not base64 JSON)
+            if "bytes" in message and message["bytes"]:
+                image_bytes = message["bytes"]
+                nparr = np.frombuffer(image_bytes, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR) # BGR
+                
+                if img is None:
+                    await websocket.send_json({
+                        "success": False,
+                        "error": "Failed to decode JPEG frame",
+                        "detections": [],
+                        "total_detections": 0,
+                        "frame_size": [0, 0]
                     })
-            
-            annotated_b64 = image_to_base64(result.plot())
-            
-            # Send back results
-            await websocket.send_json({
-                "success": True,
-                "annotated_image": annotated_b64,
-                "detections": detections,
-                "total_detections": len(detections),
-                "timestamp": datetime.now().isoformat()
-            })
-            
+                    continue
+                
+                height, width = img.shape[:2]
+                
+                # Run model.predict inside asyncio.to_thread with threading.Lock
+                results = await asyncio.to_thread(
+                    predict_frame,
+                    img,
+                    conn_conf,
+                    conn_overlap,
+                    LIVE_IMGSZ
+                )
+                
+                detections = []
+                if results is not None and len(results) > 0:
+                    result = results[0]
+                    if result.boxes is not None:
+                        for box in result.boxes:
+                            cls_id = int(box.cls[0])
+                            detections.append({
+                                'class': Config.CLASS_NAMES.get(cls_id, f"class_{cls_id}"),
+                                'confidence': float(box.conf[0]),
+                                'bbox': [float(coord) for coord in box.xyxy[0].tolist()]
+                            })
+                
+                # Send back only JSON without annotated image or base64
+                await websocket.send_json({
+                    "success": True,
+                    "detections": detections,
+                    "total_detections": len(detections),
+                    "frame_size": [width, height]
+                })
+
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except Exception as e:
         logger.error(f"WebSocket error: {e}", exc_info=True)
-        # Try to send error if possible, or just close
         try:
-            await websocket.send_json({"error": str(e)})
-        except:
+            await websocket.send_json({"success": False, "error": str(e)})
+        except Exception:
             pass

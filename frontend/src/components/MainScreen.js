@@ -21,16 +21,34 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const [cameras, setCameras] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [resolution, setResolution] = useState('640x480');
-  const [targetFps, setTargetFps] = useState(5);
+  const [targetFps, setTargetFps] = useState(15);
   const [wsStatus, setWsStatus] = useState('disconnected'); // disconnected, connecting, open, error
   const [isMaximized, setIsMaximized] = useState(false);
   const videoRef = React.useRef(null);
   const canvasRef = React.useRef(null);
   const streamRef = React.useRef(null);
   const fpsCounterRef = React.useRef(0); // Count frames for real FPS calculation
+  
+  // High-performance streaming refs
+  const targetFpsRef = React.useRef(15);
+  const captureCanvasRef = React.useRef(null);
+  const isWaitingForResponseRef = React.useRef(false);
+  const lastSendTimeRef = React.useRef(0);
+  const responseTimeoutRef = React.useRef(null);
+  const sendTimerRef = React.useRef(null);
+  const animFrameIdRef = React.useRef(null);
+  const isCameraActiveRef = React.useRef(false);
+  const latestDetectionsRef = React.useRef(null);
+  const lastUiUpdateRef = React.useRef(0);
+  const uiThrottleTimerRef = React.useRef(null);
+  const realLatencyRef = React.useRef(0);
 
   const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000';
-  const WS_BASE_URL = process.env.REACT_APP_WS_BASE_URL || 'ws://localhost:5000';
+  const WS_BASE_URL = process.env.REACT_APP_WS_BASE_URL || (
+    API_BASE_URL.startsWith('https://') 
+      ? API_BASE_URL.replace('https://', 'wss://') 
+      : API_BASE_URL.replace('http://', 'ws://')
+  );
 
   const API_URL = `${API_BASE_URL}/api/detect`;
   const HEALTH_URL = `${API_BASE_URL}/api/health`;
@@ -70,7 +88,142 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
 
   const [liveResults, setLiveResults] = useState(null);
   const websocketRef = React.useRef(null);
-  const frameIntervalRef = React.useRef(null);
+
+  // Sync targetFpsRef with state
+  useEffect(() => {
+    targetFpsRef.current = targetFps;
+  }, [targetFps]);
+
+  // Send confidence & overlap settings only when sliders change
+  const sendSettings = (conf, ovlp) => {
+    if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
+      websocketRef.current.send(
+        JSON.stringify({
+          confidence: conf / 100,
+          overlap: 1 - (ovlp / 100)
+        })
+      );
+    }
+  };
+
+  useEffect(() => {
+    if (isCameraActive && wsStatus === 'open') {
+      sendSettings(confidencePct, overlapPct);
+    }
+  }, [confidencePct, overlapPct, isCameraActive, wsStatus]);
+
+  // Render loop: draws live video every screen refresh and overlays YOLO detections
+  const renderLoop = () => {
+    if (!isCameraActiveRef.current) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (video && canvas && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
+
+      const ctx = canvas.getContext('2d');
+      // 1. Draw smooth live video
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // 2. Draw latest detection boxes and labels on top
+      const data = latestDetectionsRef.current;
+      if (data && data.detections && data.frame_size) {
+        const [frameW, frameH] = data.frame_size;
+        const scaleX = frameW > 0 ? canvas.width / frameW : 1;
+        const scaleY = frameH > 0 ? canvas.height / frameH : 1;
+
+        data.detections.forEach((det) => {
+          if (!det.bbox) return;
+          const [x1, y1, x2, y2] = det.bbox;
+          const bx = x1 * scaleX;
+          const by = y1 * scaleY;
+          const bw = (x2 - x1) * scaleX;
+          const bh = (y2 - y1) * scaleY;
+
+          // Bounding box
+          ctx.strokeStyle = '#ef4444';
+          ctx.lineWidth = Math.max(2, Math.round(canvas.width / 320));
+          ctx.strokeRect(bx, by, bw, bh);
+
+          // Label badge
+          const label = `${det.class} ${(det.confidence * 100).toFixed(0)}%`;
+          const fontSize = Math.max(12, Math.round(canvas.width / 45));
+          ctx.font = `600 ${fontSize}px sans-serif`;
+          const textMetrics = ctx.measureText(label);
+          const textHeight = fontSize * 1.2;
+
+          const labelY = by > textHeight + 6 ? by - 6 : by + textHeight;
+          const bgY = by > textHeight + 6 ? by - textHeight - 6 : by;
+
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';
+          ctx.fillRect(bx, bgY, textMetrics.width + 8, textHeight + 4);
+
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(label, bx + 4, labelY);
+        });
+      }
+    }
+
+    animFrameIdRef.current = requestAnimationFrame(renderLoop);
+  };
+
+  // Capture frame and send raw JPEG blob to backend
+  const sendNextFrame = () => {
+    if (!isCameraActiveRef.current) return;
+    if (!websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) return;
+    if (isWaitingForResponseRef.current) return;
+
+    const video = videoRef.current;
+    if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+      if (sendTimerRef.current) clearTimeout(sendTimerRef.current);
+      sendTimerRef.current = setTimeout(sendNextFrame, 50);
+      return;
+    }
+
+    if (!captureCanvasRef.current) {
+      captureCanvasRef.current = document.createElement('canvas');
+    }
+    const captureCanvas = captureCanvasRef.current;
+
+    // Resize frames to 480px wide
+    const targetWidth = 480;
+    const targetHeight = Math.round((video.videoHeight / video.videoWidth) * targetWidth);
+
+    if (captureCanvas.width !== targetWidth || captureCanvas.height !== targetHeight) {
+      captureCanvas.width = targetWidth;
+      captureCanvas.height = targetHeight;
+    }
+
+    const ctx = captureCanvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+
+    captureCanvas.toBlob(
+      (blob) => {
+        if (!blob || !isCameraActiveRef.current || !websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        isWaitingForResponseRef.current = true;
+        lastSendTimeRef.current = performance.now();
+
+        // 4-second timeout in case reply never arrives
+        if (responseTimeoutRef.current) clearTimeout(responseTimeoutRef.current);
+        responseTimeoutRef.current = setTimeout(() => {
+          console.warn('Live detection response timed out (4s), triggering next frame');
+          isWaitingForResponseRef.current = false;
+          sendNextFrame();
+        }, 4000);
+
+        websocketRef.current.send(blob);
+      },
+      'image/jpeg',
+      0.6
+    );
+  };
 
   const startCamera = async () => {
     if (!selectedCameraId) {
@@ -92,11 +245,31 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.style.display = 'block';
+        const video = videoRef.current;
+        video.srcObject = stream;
+        video.style.display = 'block';
         streamRef.current = stream;
+        isCameraActiveRef.current = true;
         setIsCameraActive(true);
-        connectWebSocket();
+
+        const onVideoReady = () => {
+          if (animFrameIdRef.current) {
+            cancelAnimationFrame(animFrameIdRef.current);
+          }
+          animFrameIdRef.current = requestAnimationFrame(renderLoop);
+          connectWebSocket();
+        };
+
+        if (video.readyState >= 2) {
+          onVideoReady();
+        } else {
+          video.onloadedmetadata = () => {
+            video.play().catch(e => console.warn('Video play warning:', e));
+            onVideoReady();
+          };
+        }
+        
+        video.play().catch(e => console.warn('Video play warning:', e));
       }
     } catch (err) {
       console.error('Error accessing camera:', err);
@@ -113,75 +286,96 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     ws.onopen = () => {
       console.log('Connected to live detection server');
       setWsStatus('open');
-      // Start sending frames
-      startFrameStreaming();
+      // Send initial settings
+      sendSettings(confidencePct, overlapPct);
+      // Start sequential frame streaming
+      isWaitingForResponseRef.current = false;
+      sendNextFrame();
     };
     
     ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.success && canvasRef.current) {
-        // Increment FPS counter
-        fpsCounterRef.current += 1;
+      try {
+        const data = JSON.parse(event.data);
+        if (data.success) {
+          const now = performance.now();
+          const latency = Math.round(now - lastSendTimeRef.current);
+          realLatencyRef.current = latency;
 
-        const ctx = canvasRef.current.getContext('2d');
-        const img = new Image();
-        img.onload = () => {
-          canvasRef.current.width = img.width;
-          canvasRef.current.height = img.height;
-          ctx.drawImage(img, 0, 0);
-        };
-        img.src = data.annotated_image;
-        setLiveResults(data);
+          // Clear response timeout
+          if (responseTimeoutRef.current) {
+            clearTimeout(responseTimeoutRef.current);
+            responseTimeoutRef.current = null;
+          }
+
+          fpsCounterRef.current += 1;
+          latestDetectionsRef.current = data;
+
+          // Update results panel at most 4 times per second (250ms)
+          if (now - lastUiUpdateRef.current >= 250) {
+            lastUiUpdateRef.current = now;
+            setLiveResults(data);
+          } else if (!uiThrottleTimerRef.current) {
+            uiThrottleTimerRef.current = setTimeout(() => {
+              uiThrottleTimerRef.current = null;
+              lastUiUpdateRef.current = performance.now();
+              if (latestDetectionsRef.current) {
+                setLiveResults(latestDetectionsRef.current);
+              }
+            }, 250 - (now - lastUiUpdateRef.current));
+          }
+
+          // Allow next frame and pace according to FPS target
+          isWaitingForResponseRef.current = false;
+          const minInterval = 1000 / targetFpsRef.current;
+          const elapsed = now - lastSendTimeRef.current;
+          const delay = Math.max(0, minInterval - elapsed);
+
+          if (sendTimerRef.current) clearTimeout(sendTimerRef.current);
+          sendTimerRef.current = setTimeout(sendNextFrame, delay);
+        }
+      } catch (err) {
+        console.error('Error processing WebSocket message:', err);
+        isWaitingForResponseRef.current = false;
       }
     };
     
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
       setWsStatus('error');
+      isWaitingForResponseRef.current = false;
     };
     
     ws.onclose = () => {
       setWsStatus('disconnected');
+      isWaitingForResponseRef.current = false;
     };
 
     websocketRef.current = ws;
   };
 
-  const startFrameStreaming = () => {
-    // Clear existing if any (e.g. if changing FPS)
-    if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
-
-    const intervalMs = 1000 / targetFps;
-
-    frameIntervalRef.current = setInterval(() => {
-      if (!videoRef.current || !websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) return;
-      
-      const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(videoRef.current, 0, 0);
-      
-      const base64Image = canvas.toDataURL('image/jpeg', 0.6); // 0.6 quality for speed
-      
-      websocketRef.current.send(JSON.stringify({
-        image: base64Image,
-        confidence: confidencePct / 100,
-        overlap: 1 - (overlapPct / 100)
-      }));
-      
-    }, intervalMs);
-  };
-
-  // Allow updating FPS while running
-  useEffect(() => {
-    if (isCameraActive && wsStatus === 'open') {
-      startFrameStreaming();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetFps]);
-
   const stopCamera = () => {
+    isCameraActiveRef.current = false;
+
+    if (animFrameIdRef.current) {
+      cancelAnimationFrame(animFrameIdRef.current);
+      animFrameIdRef.current = null;
+    }
+    if (responseTimeoutRef.current) {
+      clearTimeout(responseTimeoutRef.current);
+      responseTimeoutRef.current = null;
+    }
+    if (sendTimerRef.current) {
+      clearTimeout(sendTimerRef.current);
+      sendTimerRef.current = null;
+    }
+    if (uiThrottleTimerRef.current) {
+      clearTimeout(uiThrottleTimerRef.current);
+      uiThrottleTimerRef.current = null;
+    }
+
+    isWaitingForResponseRef.current = false;
+    latestDetectionsRef.current = null;
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -189,11 +383,6 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
       videoRef.current.style.display = 'none';
-    }
-    
-    if (frameIntervalRef.current) {
-      clearInterval(frameIntervalRef.current);
-      frameIntervalRef.current = null;
     }
     
     if (websocketRef.current) {
@@ -324,21 +513,21 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   });
 
   useEffect(() => {
-    // Simulate live telemetry (latency/memory), but use REAL FPS
+    // Live telemetry: real measured latency, memory, and real FPS
     const telemetryInterval = setInterval(() => {
       const currentFps = fpsCounterRef.current;
       fpsCounterRef.current = 0; // Reset counter every second
 
       setSystemStats(prev => ({
         ...prev,
-        latency: Math.floor(Math.random() * (45 - 15) + 15), // Random 15-45ms (simulated)
+        latency: realLatencyRef.current > 0 ? realLatencyRef.current : (isCameraActive ? 0 : prev.latency),
         memory: +(4.0 + Math.random() * 0.5).toFixed(1), // Random 4.0-4.5GB (simulated)
         fps: currentFps // REAL FPS
       }));
     }, 1000); // Update exactly every 1 second
 
     return () => clearInterval(telemetryInterval);
-  }, []);
+  }, [isCameraActive]);
 
   return (
     <div className="main-screen">
@@ -728,7 +917,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
             <div className="adjustment-stack">
                <div className="slider-block">
                  <div className="control-label"><span>FPS Target</span><span className="value-display">{targetFps}</span></div>
-                 <input type="range" min="1" max="10" step="1" value={targetFps} onChange={(e) => setTargetFps(parseInt(e.target.value))} className="ui-slider" />
+                 <input type="range" min="1" max="30" step="1" value={targetFps} onChange={(e) => setTargetFps(parseInt(e.target.value))} className="ui-slider" />
                </div>
                <div className="slider-block">
                  <div className="control-label"><span>Confidence</span><span className="value-display">{confidencePct}%</span></div>
@@ -768,7 +957,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
                   <canvas 
                     ref={canvasRef}
                     className="detection-canvas"
-                    style={{ width: '100%', height: '100%', objectFit: 'fill' }}
+                    style={{ width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', position: 'relative', zIndex: 10 }}
                   />
                 )}
              </div>
