@@ -43,11 +43,18 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const uiThrottleTimerRef = React.useRef(null);
   const realLatencyRef = React.useRef(0);
 
-  const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000';
+  const isLocalhost = typeof window !== 'undefined' && 
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+  const DEFAULT_REMOTE_API = 'https://jerryjr1705-fabric-backend.hf.space';
+  const DEFAULT_REMOTE_WS = 'wss://jerryjr1705-fabric-backend.hf.space';
+
+  const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 
+    (isLocalhost ? 'http://localhost:5000' : DEFAULT_REMOTE_API);
+
   const WS_BASE_URL = process.env.REACT_APP_WS_BASE_URL || (
     API_BASE_URL.startsWith('https://') 
       ? API_BASE_URL.replace('https://', 'wss://') 
-      : API_BASE_URL.replace('http://', 'ws://')
+      : (isLocalhost ? 'ws://localhost:5000' : DEFAULT_REMOTE_WS)
   );
 
   const API_URL = `${API_BASE_URL}/api/detect`;
@@ -119,7 +126,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     const video = videoRef.current;
     const canvas = canvasRef.current;
 
-    if (video && canvas && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+    if (video && canvas && video.videoWidth > 0 && video.videoHeight > 0) {
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
@@ -178,7 +185,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     if (isWaitingForResponseRef.current) return;
 
     const video = videoRef.current;
-    if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
       if (sendTimerRef.current) clearTimeout(sendTimerRef.current);
       sendTimerRef.current = setTimeout(sendNextFrame, 50);
       return;
@@ -235,7 +242,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
       const [width, height] = resolution.split('x').map(Number);
       const constraints = {
         video: { 
-          deviceId: { exact: selectedCameraId },
+          deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
           width: { ideal: width },
           height: { ideal: height }
         },
@@ -247,29 +254,21 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
       if (videoRef.current) {
         const video = videoRef.current;
         video.srcObject = stream;
-        video.style.display = 'block';
         streamRef.current = stream;
         isCameraActiveRef.current = true;
         setIsCameraActive(true);
 
-        const onVideoReady = () => {
-          if (animFrameIdRef.current) {
-            cancelAnimationFrame(animFrameIdRef.current);
-          }
-          animFrameIdRef.current = requestAnimationFrame(renderLoop);
-          connectWebSocket();
-        };
-
-        if (video.readyState >= 2) {
-          onVideoReady();
-        } else {
-          video.onloadedmetadata = () => {
-            video.play().catch(e => console.warn('Video play warning:', e));
-            onVideoReady();
-          };
+        try {
+          await video.play();
+        } catch (e) {
+          console.warn('Video play warning:', e);
         }
-        
-        video.play().catch(e => console.warn('Video play warning:', e));
+
+        if (animFrameIdRef.current) {
+          cancelAnimationFrame(animFrameIdRef.current);
+        }
+        animFrameIdRef.current = requestAnimationFrame(renderLoop);
+        connectWebSocket();
       }
     } catch (err) {
       console.error('Error accessing camera:', err);
@@ -816,14 +815,31 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
       {/* Live Detection Tab */}
       {activeTab === 'live' && (
       <main className={`dashboard-grid ${isMaximized ? 'maximized' : ''}`}>
-        {/* Column 1: Live Feed (Raw) + Settings (Left Sidebar) */}
+        {/* Hidden video element used as media source for capture & canvas rendering */}
+        <video 
+          ref={videoRef} 
+          autoPlay 
+          playsInline 
+          muted 
+          style={{ 
+            position: 'fixed', 
+            top: '-9999px', 
+            left: '-9999px', 
+            width: '1px', 
+            height: '1px', 
+            opacity: 0, 
+            pointerEvents: 'none' 
+          }} 
+        />
+
+        {/* Column 1: Camera Controls & Adjustments (Left Sidebar) */}
         <section className="panel-card upload-card">
           <div className="panel-header">
-            <h3 className="panel-title">Live Feed (Raw)</h3>
+            <h3 className="panel-title">Camera Controls</h3>
           </div>
           <div className="panel-body">
             {/* Camera Controls */}
-            <div className="camera-controls-stack" style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '15px' }}>
+            <div className="camera-controls-stack" style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
               <div className="control-group">
                 <label className="label-text" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Camera Source</label>
                 <select 
@@ -858,7 +874,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
                 </select>
               </div>
 
-              <div className="camera-actions" style={{ display: 'flex', gap: '10px' }}>
+              <div className="camera-actions" style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                 <button 
                   className="camera-button"
                   onClick={startCamera}
@@ -876,41 +892,6 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
                   STOP
                 </button>
               </div>
-            </div>
-
-            {/* Video Area */}
-            <div className="live-feed-container" style={{ width: '100%', aspectRatio: '4/3', position: 'relative', background: '#000', borderRadius: '4px', overflow: 'hidden', marginBottom: '1rem' }}>
-               {/* Status Badge */}
-               {isCameraActive && (
-                 <div className="stream-status" style={{ 
-                    position: 'absolute', 
-                    top: '10px', 
-                    right: '10px', 
-                    zIndex: 10,
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    fontSize: '0.7rem',
-                    fontWeight: 'bold',
-                    background: wsStatus === 'open' ? 'rgba(16, 185, 129, 0.8)' : 'rgba(239, 68, 68, 0.8)',
-                    color: 'white'
-                 }}>
-                   {wsStatus === 'open' ? 'LIVE' : wsStatus.toUpperCase()}
-                 </div>
-               )}
-
-               {!isCameraActive && (
-                 <div className="placeholder-state" style={{ position: 'absolute', inset: 0, justifyContent: 'center', height: '100%' }}>
-                    <div className="placeholder-icon" style={{ fontSize: '2rem' }}>📹</div>
-                    <p style={{fontSize: '0.8rem'}}>Inactive</p>
-                 </div>
-               )}
-               <video 
-                 ref={videoRef} 
-                 className="live-video"
-                 style={{ width: '100%', height: '100%', objectFit: 'contain', display: isCameraActive ? 'block' : 'none' }}
-                 autoPlay
-                 playsInline
-               />
             </div>
 
             {/* Settings Compact */}
@@ -947,11 +928,29 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
           </div>
           <div className="panel-body">
              <div className="live-feed-container" style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {isCameraActive && (
+                  <div className="stream-status" style={{ 
+                     position: 'absolute', 
+                     top: '12px', 
+                     right: '12px', 
+                     zIndex: 20,
+                     padding: '4px 8px',
+                     borderRadius: '4px',
+                     fontSize: '0.7rem',
+                     fontWeight: 'bold',
+                     background: wsStatus === 'open' ? 'rgba(16, 185, 129, 0.85)' : 'rgba(239, 68, 68, 0.85)',
+                     color: 'white',
+                     letterSpacing: '0.5px'
+                  }}>
+                    {wsStatus === 'open' ? '● LIVE' : wsStatus.toUpperCase()}
+                  </div>
+                )}
+
                 {!isCameraActive ? (
                   <div className="placeholder-state" style={{ height: '100%', justifyContent: 'center' }}>
-                    <div className="placeholder-icon">🤖</div>
-                    <h3>Waiting for Stream</h3>
-                    <p>Annotated defects will appear here</p>
+                    <div className="placeholder-icon">📹</div>
+                    <h3>Camera Inactive</h3>
+                    <p>Select your camera and click START to view the live annotated feed</p>
                   </div>
                 ) : (
                   <canvas 

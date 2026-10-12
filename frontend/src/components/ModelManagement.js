@@ -2,7 +2,10 @@ import React, { useState, useEffect } from 'react';
 import '../styles/ModelManagement.css';
 import axios from 'axios';
 
-const API_BASE = (process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000') + '/api';
+const isLocalhost = typeof window !== 'undefined' && 
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const DEFAULT_API = isLocalhost ? 'http://localhost:5000' : 'https://jerryjr1705-fabric-backend.hf.space';
+const API_BASE = (process.env.REACT_APP_API_BASE_URL || DEFAULT_API) + '/api';
 
 function ModelManagement({ onClose }) {
   const [models, setModels] = useState(null);
