@@ -42,24 +42,44 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const lastUiUpdateRef = React.useRef(0);
   const uiThrottleTimerRef = React.useRef(null);
   const realLatencyRef = React.useRef(0);
+  const reconnectTimerRef = React.useRef(null);
+  const scanLinePosRef = React.useRef(0);
+  const scanDirectionRef = React.useRef(1);
 
-  const isLocalhost = typeof window !== 'undefined' && 
-    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
   const DEFAULT_REMOTE_API = 'https://jerryjr1705-fabric-backend.hf.space';
   const DEFAULT_REMOTE_WS = 'wss://jerryjr1705-fabric-backend.hf.space';
 
-  const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 
-    (isLocalhost ? 'http://localhost:5000' : DEFAULT_REMOTE_API);
+  // Always default to active Hugging Face backend unless explicitly overridden
+  const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || DEFAULT_REMOTE_API;
 
   const WS_BASE_URL = process.env.REACT_APP_WS_BASE_URL || (
     API_BASE_URL.startsWith('https://') 
       ? API_BASE_URL.replace('https://', 'wss://') 
-      : (isLocalhost ? 'ws://localhost:5000' : DEFAULT_REMOTE_WS)
+      : (API_BASE_URL.startsWith('http://') ? API_BASE_URL.replace('http://', 'ws://') : DEFAULT_REMOTE_WS)
   );
 
   const API_URL = `${API_BASE_URL}/api/detect`;
   const HEALTH_URL = `${API_BASE_URL}/api/health`;
   const WS_URL = `${WS_BASE_URL}/ws/detect`;
+
+  // Cross-browser helper for rounded rectangles on canvas
+  const drawRoundedRect = (ctx, x, y, width, height, radius) => {
+    if (ctx.roundRect) {
+      ctx.roundRect(x, y, width, height, radius);
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + width - radius, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+      ctx.lineTo(x + width, y + height - radius);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+      ctx.lineTo(x + radius, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+    }
+  };
 
   useEffect(() => {
     checkServerHealth();
@@ -120,7 +140,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     }
   }, [confidencePct, overlapPct, isCameraActive, wsStatus]);
 
-  // Render loop: draws live video every screen refresh and overlays YOLO detections
+  // Render loop: draws live video every screen refresh and overlays YOLO detections + AI HUD
   const renderLoop = () => {
     if (!isCameraActiveRef.current) return;
 
@@ -134,59 +154,234 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
       }
 
       const ctx = canvas.getContext('2d');
-      // 1. Draw smooth live video
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const cw = canvas.width;
+      const ch = canvas.height;
 
-      // 2. Draw latest detection boxes and labels on top
+      // 1. Draw smooth live video
+      ctx.drawImage(video, 0, 0, cw, ch);
+
+      // 2. Animate subtle AI scanning laser beam
+      scanLinePosRef.current += 3 * scanDirectionRef.current;
+      if (scanLinePosRef.current >= ch) {
+        scanLinePosRef.current = ch;
+        scanDirectionRef.current = -1;
+      } else if (scanLinePosRef.current <= 0) {
+        scanLinePosRef.current = 0;
+        scanDirectionRef.current = 1;
+      }
+
+      const scanY = scanLinePosRef.current;
+      const scanGrad = ctx.createLinearGradient(0, scanY - 24, 0, scanY + 24);
+      scanGrad.addColorStop(0, 'rgba(6, 182, 212, 0)');
+      scanGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.35)');
+      scanGrad.addColorStop(1, 'rgba(6, 182, 212, 0)');
+      ctx.fillStyle = scanGrad;
+      ctx.fillRect(0, scanY - 24, cw, 48);
+
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.75)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, scanY);
+      ctx.lineTo(cw, scanY);
+      ctx.stroke();
+
+      // 3. AI Viewport Corner Reticle Brackets
+      const bLen = Math.min(36, Math.round(cw * 0.06));
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.65)';
+      ctx.lineWidth = 3;
+      // Top-Left
+      ctx.beginPath();
+      ctx.moveTo(18, 18 + bLen);
+      ctx.lineTo(18, 18);
+      ctx.lineTo(18 + bLen, 18);
+      ctx.stroke();
+      // Top-Right
+      ctx.beginPath();
+      ctx.moveTo(cw - 18 - bLen, 18);
+      ctx.lineTo(cw - 18, 18);
+      ctx.lineTo(cw - 18, 18 + bLen);
+      ctx.stroke();
+      // Bottom-Left
+      ctx.beginPath();
+      ctx.moveTo(18, ch - 18 - bLen);
+      ctx.lineTo(18, ch - 18);
+      ctx.lineTo(18 + bLen, ch - 18);
+      ctx.stroke();
+      // Bottom-Right
+      ctx.beginPath();
+      ctx.moveTo(cw - 18 - bLen, ch - 18);
+      ctx.lineTo(cw - 18, ch - 18);
+      ctx.lineTo(cw - 18, ch - 18 - bLen);
+      ctx.stroke();
+
+      // 4. Draw Detection Annotations
       const data = latestDetectionsRef.current;
+      let defectCount = 0;
+      let hasPerfectFabric = false;
+
       if (data && data.detections && data.frame_size) {
         const [frameW, frameH] = data.frame_size;
-        const scaleX = frameW > 0 ? canvas.width / frameW : 1;
-        const scaleY = frameH > 0 ? canvas.height / frameH : 1;
+        const scaleX = frameW > 0 ? cw / frameW : 1;
+        const scaleY = frameH > 0 ? ch / frameH : 1;
 
         data.detections.forEach((det) => {
           if (!det.bbox) return;
+
+          const isPerfect = det.class === 'fabric_perfect';
+          if (isPerfect) {
+            hasPerfectFabric = true;
+            return;
+          }
+
+          defectCount++;
           const [x1, y1, x2, y2] = det.bbox;
-          const bx = x1 * scaleX;
-          const by = y1 * scaleY;
-          const bw = (x2 - x1) * scaleX;
-          const bh = (y2 - y1) * scaleY;
+          const bx = Math.max(0, Math.min(cw, x1 * scaleX));
+          const by = Math.max(0, Math.min(ch, y1 * scaleY));
+          const bw = Math.min(cw - bx, (x2 - x1) * scaleX);
+          const bh = Math.min(ch - by, (y2 - y1) * scaleY);
 
-          // Bounding box
-          ctx.strokeStyle = '#ef4444';
-          ctx.lineWidth = Math.max(2, Math.round(canvas.width / 320));
+          // Color palette per defect class
+          let color = '#ef4444'; // Red for hole
+          let bgTint = 'rgba(239, 68, 68, 0.22)';
+          if (det.class.includes('broken')) {
+            color = '#f97316'; // Amber / Orange
+            bgTint = 'rgba(249, 115, 22, 0.22)';
+          } else if (det.class.includes('missing')) {
+            color = '#d946ef'; // Fuchsia
+            bgTint = 'rgba(217, 70, 239, 0.22)';
+          } else if (det.class.includes('thick')) {
+            color = '#06b6d4'; // Cyan
+            bgTint = 'rgba(6, 182, 212, 0.22)';
+          }
+
+          // Shaded defect region
+          ctx.fillStyle = bgTint;
+          ctx.fillRect(bx, by, bw, bh);
+
+          // Glowing Bounding Box
+          ctx.save();
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 10;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = Math.max(3, Math.round(cw / 260));
           ctx.strokeRect(bx, by, bw, bh);
+          ctx.restore();
 
-          // Label badge
-          const label = `${det.class} ${(det.confidence * 100).toFixed(0)}%`;
-          const fontSize = Math.max(12, Math.round(canvas.width / 45));
-          ctx.font = `600 ${fontSize}px sans-serif`;
+          // Corner brackets on the bounding box
+          const cLen = Math.min(14, bw / 3, bh / 3);
+          if (cLen > 3) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = Math.max(3, Math.round(cw / 260));
+            // Top-left
+            ctx.beginPath();
+            ctx.moveTo(bx, by + cLen);
+            ctx.lineTo(bx, by);
+            ctx.lineTo(bx + cLen, by);
+            ctx.stroke();
+            // Top-right
+            ctx.beginPath();
+            ctx.moveTo(bx + bw - cLen, by);
+            ctx.lineTo(bx + bw, by);
+            ctx.lineTo(bx + bw, by + cLen);
+            ctx.stroke();
+            // Bottom-left
+            ctx.beginPath();
+            ctx.moveTo(bx, by + bh - cLen);
+            ctx.lineTo(bx, by + bh);
+            ctx.lineTo(bx + cLen, by + bh);
+            ctx.stroke();
+            // Bottom-right
+            ctx.beginPath();
+            ctx.moveTo(bx + bw - cLen, by + bh);
+            ctx.lineTo(bx + bw, by + bh);
+            ctx.lineTo(bx + bw, by + bh - cLen);
+            ctx.stroke();
+          }
+
+          // Defect Tag / Badge
+          const friendlyName = det.class.replace('fabric_', '').replace('_', ' ').toUpperCase();
+          const label = `⚠️ ${friendlyName} ${(det.confidence * 100).toFixed(0)}%`;
+          const fontSize = Math.max(13, Math.round(cw / 42));
+          ctx.font = `bold ${fontSize}px system-ui, -apple-system, sans-serif`;
           const textMetrics = ctx.measureText(label);
-          const textHeight = fontSize * 1.2;
+          const badgeW = textMetrics.width + 16;
+          const badgeH = fontSize + 10;
 
-          const labelY = by > textHeight + 6 ? by - 6 : by + textHeight;
-          const bgY = by > textHeight + 6 ? by - textHeight - 6 : by;
+          const badgeX = Math.max(4, Math.min(cw - badgeW - 4, bx));
+          const badgeY = by >= badgeH + 6 ? by - badgeH - 4 : by + 4;
 
-          ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';
-          ctx.fillRect(bx, bgY, textMetrics.width + 8, textHeight + 4);
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+          ctx.beginPath();
+          drawRoundedRect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
+          ctx.fill();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
 
           ctx.fillStyle = '#ffffff';
-          ctx.fillText(label, bx + 4, labelY);
+          ctx.fillText(label, badgeX + 8, badgeY + fontSize);
         });
       }
+
+      // 5. TOP HUD STATUS BANNER
+      const hudFontSize = Math.max(12, Math.round(cw / 50));
+      ctx.font = `600 ${hudFontSize}px system-ui, -apple-system, sans-serif`;
+
+      let hudText = '✓ AI SCANNER: FABRIC CLEAR (NO DEFECTS)';
+      let hudColor = '#10b981';
+      let hudBg = 'rgba(6, 78, 59, 0.88)';
+      let hudBorder = 'rgba(52, 211, 153, 0.65)';
+
+      if (defectCount > 0) {
+        hudText = `⚠️ DEFECT DETECTED: ${defectCount} FAULT${defectCount > 1 ? 'S' : ''} FOUND`;
+        hudColor = '#f87171';
+        hudBg = 'rgba(127, 29, 29, 0.92)';
+        hudBorder = 'rgba(239, 68, 68, 0.85)';
+      } else if (hasPerfectFabric) {
+        hudText = '✓ INSPECTION: FABRIC PERFECT QUALITY VERIFIED';
+        hudColor = '#34d399';
+        hudBg = 'rgba(6, 78, 59, 0.88)';
+        hudBorder = 'rgba(52, 211, 153, 0.65)';
+      } else if (wsStatus !== 'open') {
+        hudText = `⚡ AI SERVICE: ${wsStatus.toUpperCase()}`;
+        hudColor = '#fbbf24';
+        hudBg = 'rgba(120, 53, 15, 0.88)';
+        hudBorder = 'rgba(245, 158, 11, 0.65)';
+      }
+
+      const hudMetrics = ctx.measureText(hudText);
+      const hudW = hudMetrics.width + 24;
+      const hudH = hudFontSize + 12;
+      const hudX = Math.round((cw - hudW) / 2);
+      const hudY = 16;
+
+      ctx.save();
+      ctx.shadowColor = hudColor;
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = hudBg;
+      ctx.beginPath();
+      drawRoundedRect(ctx, hudX, hudY, hudW, hudH, 6);
+      ctx.fill();
+      ctx.strokeStyle = hudBorder;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(hudText, hudX + 12, hudY + hudFontSize + 2);
     }
 
     animFrameIdRef.current = requestAnimationFrame(renderLoop);
   };
 
-  // Capture frame and send raw JPEG blob to backend
+  // Capture frame and send raw JPEG ArrayBuffer to backend
   const sendNextFrame = () => {
     if (!isCameraActiveRef.current) return;
     if (!websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) return;
     if (isWaitingForResponseRef.current) return;
 
     const video = videoRef.current;
-    if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
+    if (!video || !video.videoWidth || !video.videoHeight) {
       if (sendTimerRef.current) clearTimeout(sendTimerRef.current);
       sendTimerRef.current = setTimeout(sendNextFrame, 50);
       return;
@@ -199,7 +394,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
 
     // Resize frames to 480px wide
     const targetWidth = 480;
-    const targetHeight = Math.round((video.videoHeight / video.videoWidth) * targetWidth);
+    const targetHeight = Math.max(1, Math.round((video.videoHeight / video.videoWidth) * targetWidth));
 
     if (captureCanvas.width !== targetWidth || captureCanvas.height !== targetHeight) {
       captureCanvas.width = targetWidth;
@@ -210,26 +405,36 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
 
     captureCanvas.toBlob(
-      (blob) => {
+      async (blob) => {
         if (!blob || !isCameraActiveRef.current || !websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) {
           return;
         }
 
-        isWaitingForResponseRef.current = true;
-        lastSendTimeRef.current = performance.now();
+        try {
+          const buffer = await blob.arrayBuffer();
+          if (!isCameraActiveRef.current || !websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) {
+            return;
+          }
 
-        // 4-second timeout in case reply never arrives
-        if (responseTimeoutRef.current) clearTimeout(responseTimeoutRef.current);
-        responseTimeoutRef.current = setTimeout(() => {
-          console.warn('Live detection response timed out (4s), triggering next frame');
+          isWaitingForResponseRef.current = true;
+          lastSendTimeRef.current = performance.now();
+
+          // 4-second timeout in case reply never arrives
+          if (responseTimeoutRef.current) clearTimeout(responseTimeoutRef.current);
+          responseTimeoutRef.current = setTimeout(() => {
+            console.warn('Live detection response timed out (4s), triggering next frame');
+            isWaitingForResponseRef.current = false;
+            sendNextFrame();
+          }, 4000);
+
+          websocketRef.current.send(buffer);
+        } catch (err) {
+          console.warn('Error reading or sending frame buffer:', err);
           isWaitingForResponseRef.current = false;
-          sendNextFrame();
-        }, 4000);
-
-        websocketRef.current.send(blob);
+        }
       },
       'image/jpeg',
-      0.6
+      0.65
     );
   };
 
@@ -278,13 +483,17 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   };
 
   const connectWebSocket = () => {
-    if (websocketRef.current) return;
+    if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) return;
+    if (websocketRef.current) {
+      try { websocketRef.current.close(); } catch(e) {}
+      websocketRef.current = null;
+    }
     
     setWsStatus('connecting');
     const ws = new WebSocket(WS_URL);
     
     ws.onopen = () => {
-      console.log('Connected to live detection server');
+      console.log('Connected to live detection server:', WS_URL);
       setWsStatus('open');
       // Send initial settings
       sendSettings(confidencePct, overlapPct);
@@ -310,8 +519,8 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
           fpsCounterRef.current += 1;
           latestDetectionsRef.current = data;
 
-          // Update results panel at most 4 times per second (250ms)
-          if (now - lastUiUpdateRef.current >= 250) {
+          // Update results panel at most 4-5 times per second (200ms)
+          if (now - lastUiUpdateRef.current >= 200) {
             lastUiUpdateRef.current = now;
             setLiveResults(data);
           } else if (!uiThrottleTimerRef.current) {
@@ -321,7 +530,7 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
               if (latestDetectionsRef.current) {
                 setLiveResults(latestDetectionsRef.current);
               }
-            }, 250 - (now - lastUiUpdateRef.current));
+            }, 200 - (now - lastUiUpdateRef.current));
           }
 
           // Allow next frame and pace according to FPS target
@@ -332,6 +541,10 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
 
           if (sendTimerRef.current) clearTimeout(sendTimerRef.current);
           sendTimerRef.current = setTimeout(sendNextFrame, delay);
+        } else {
+          isWaitingForResponseRef.current = false;
+          if (sendTimerRef.current) clearTimeout(sendTimerRef.current);
+          sendTimerRef.current = setTimeout(sendNextFrame, 100);
         }
       } catch (err) {
         console.error('Error processing WebSocket message:', err);
@@ -346,8 +559,21 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
     };
     
     ws.onclose = () => {
+      console.log('WebSocket closed');
+      websocketRef.current = null;
       setWsStatus('disconnected');
       isWaitingForResponseRef.current = false;
+
+      // Auto-reconnect if camera is still active
+      if (isCameraActiveRef.current) {
+        console.log('Camera active, auto-reconnecting WebSocket in 1.5s...');
+        if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = setTimeout(() => {
+          if (isCameraActiveRef.current) {
+            connectWebSocket();
+          }
+        }, 1500);
+      }
     };
 
     websocketRef.current = ws;
@@ -356,6 +582,10 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
   const stopCamera = () => {
     isCameraActiveRef.current = false;
 
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     if (animFrameIdRef.current) {
       cancelAnimationFrame(animFrameIdRef.current);
       animFrameIdRef.current = null;
@@ -972,16 +1202,45 @@ function MainScreen({ theme = 'dark', onThemeToggle = () => {} }) {
           <div className="panel-body">
             {liveResults ? (
                <div className="detections-list">
-                  <div className="detections-header">
-                    <span className="detections-count">Detected: {liveResults.total_detections}</span>
+                  <div className="detections-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)', marginBottom: '12px' }}>
+                    <span className="detections-count" style={{ fontWeight: 'bold' }}>
+                      {liveResults.detections.filter(d => d.class !== 'fabric_perfect').length > 0 
+                        ? `⚠️ Faults Detected: ${liveResults.detections.filter(d => d.class !== 'fabric_perfect').length}` 
+                        : '✓ Normal / Defect-Free'}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 'bold' }}>LIVE</span>
                   </div>
-                  {liveResults.detections.map((d, idx) => (
-                      <div key={idx} className="detection-row">
-                        <span className="detection-class">{d.class}</span>
-                        <span className="detection-confidence">{(d.confidence * 100).toFixed(0)}%</span>
+
+                  {liveResults.detections.filter(d => d.class !== 'fabric_perfect').length === 0 ? (
+                    <div className="no-detections" style={{ padding: '24px 12px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '2rem', color: '#10b981', marginBottom: '8px' }}>✓</div>
+                      <h4 style={{ color: 'var(--text-primary)', marginBottom: '6px' }}>Fabric Quality Normal</h4>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        AI scanner is actively inspecting frames. No defects or weave anomalies detected.
+                      </p>
+                    </div>
+                  ) : (
+                    liveResults.detections.filter(d => d.class !== 'fabric_perfect').map((d, idx) => (
+                      <div key={idx} className="detection-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-secondary)', borderRadius: '6px', marginBottom: '8px', borderLeft: '4px solid #ef4444' }}>
+                        <div>
+                          <span className="detection-class" style={{ fontWeight: '700', color: '#f87171' }}>
+                            {d.class.replace('fabric_', '').replace('_', ' ').toUpperCase()}
+                          </span>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>Live Defect Marker</div>
+                        </div>
+                        <span className="detection-confidence" style={{ fontWeight: 'bold', padding: '4px 8px', borderRadius: '4px', background: 'rgba(239, 68, 68, 0.2)', color: '#f87171' }}>
+                          {(d.confidence * 100).toFixed(0)}%
+                        </span>
                       </div>
-                  ))}
+                    ))
+                  )}
                </div>
+            ) : isCameraActive ? (
+              <div className="placeholder-state" style={{ padding: '24px 12px', textAlign: 'center' }}>
+                <div className="spinner" style={{ margin: '0 auto 12px' }}></div>
+                <h4 style={{ color: 'var(--text-primary)', marginBottom: '4px' }}>AI Scanner Initializing</h4>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Connecting stream to YOLO neural network...</p>
+              </div>
             ) : (
             <div className="placeholder-state">
               <div className="placeholder-icon">📊</div>

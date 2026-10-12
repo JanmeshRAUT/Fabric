@@ -392,8 +392,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     if result.boxes is not None:
                         for box in result.boxes:
                             cls_id = int(box.cls[0])
+                            cls_name = Config.CLASS_NAMES.get(cls_id, f"class_{cls_id}")
+                            if hasattr(result, 'names') and result.names and cls_id in result.names:
+                                cls_name = str(result.names[cls_id])
                             detections.append({
-                                'class': Config.CLASS_NAMES.get(cls_id, f"class_{cls_id}"),
+                                'class': cls_name,
                                 'confidence': float(box.conf[0]),
                                 'bbox': [float(coord) for coord in box.xyxy[0].tolist()]
                             })
